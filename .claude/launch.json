@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "refynr-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@refynr/web", "dev"],
+      "port": 3000
+    }
+  ]
+}

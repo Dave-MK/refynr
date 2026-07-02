@@ -1,0 +1,18 @@
+{
+  "name": "refynr",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Refynr — non-destructive spreadsheet quality and repair",
+  "packageManager": "pnpm@10.18.3",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.8",
+    "typescript": "^5.9.3"
+  }
+}
