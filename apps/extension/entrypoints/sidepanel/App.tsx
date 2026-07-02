@@ -21,9 +21,10 @@ function scoreClass(score: number): string {
 
 /** Serialize a table as TSV — pastes straight back into Sheets/Excel. */
 function toTsv(table: Table): string {
+  const cell = (v: string) => v.replace(/[\t\r\n]+/g, " ");
   return [
-    table.headers.join("\t"),
-    ...table.rows.map((r) => r.map((v) => cellText(v).replace(/\t/g, " ")).join("\t")),
+    table.headers.map(cell).join("\t"),
+    ...table.rows.map((r) => r.map((v) => cell(cellText(v))).join("\t")),
   ].join("\n");
 }
 

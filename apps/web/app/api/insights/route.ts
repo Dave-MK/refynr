@@ -58,15 +58,26 @@ const OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+// Caps keep the prompt bounded regardless of what a client sends —
+// this endpoint costs money per call, so inputs are never trusted for size.
+const MAX_COLUMNS = 100;
+const MAX_FINDINGS = 50;
+const MAX_SAMPLE_LENGTH = 80;
+
 function buildPrompt(body: InsightRequest): string {
   const columns = body.profile.columns
+    .slice(0, MAX_COLUMNS)
     .map(
       (c) =>
-        `- "${c.name}": type=${c.type} (confidence ${c.typeConfidence}), ${c.nonEmpty} values, ${c.empty} empty, ${c.distinct} distinct, samples: ${c.samples.map((s) => JSON.stringify(s)).join(", ")}`,
+        `- "${String(c.name).slice(0, MAX_SAMPLE_LENGTH)}": type=${c.type} (confidence ${c.typeConfidence}), ${c.nonEmpty} values, ${c.empty} empty, ${c.distinct} distinct, samples: ${(c.samples ?? [])
+          .slice(0, 5)
+          .map((s) => JSON.stringify(String(s).slice(0, MAX_SAMPLE_LENGTH)))
+          .join(", ")}`,
     )
     .join("\n");
   const findings = body.findings
-    .map((f) => `- [${f.severity}] ${f.title} (rule: ${f.rule})`)
+    .slice(0, MAX_FINDINGS)
+    .map((f) => `- [${f.severity}] ${String(f.title).slice(0, 200)} (rule: ${f.rule})`)
     .join("\n");
 
   return `You are the AI analyst inside refynr, a spreadsheet data-quality tool. A deterministic rules engine has already profiled a spreadsheet and generated findings. Your job is to interpret the results for the user.

@@ -14,7 +14,8 @@ export function toCsv(table: Table): string {
 
 export function downloadCsv(table: Table, filename: string): void {
   // BOM so Excel opens the file as UTF-8 instead of mangling accents.
-  const blob = new Blob(["﻿" + toCsv(table)], {
+  const BOM = String.fromCharCode(0xfeff);
+  const blob = new Blob([BOM + toCsv(table)], {
     type: "text/csv;charset=utf-8",
   });
   const url = URL.createObjectURL(blob);

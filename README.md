@@ -57,7 +57,20 @@ returns `{health_score, projected_score, findings, patches, cleaned_data?}`.
 **Extension:** `pnpm --filter @refynr/extension build`, then load
 `apps/extension/.output/chrome-mv3` via chrome://extensions → Load unpacked.
 Flow: copy cells in Sheets/Excel Online → paste in the side panel → review →
-"Copy cleaned data" → paste back.
+"Copy cleaned data" → paste back. See [apps/extension/README.md](apps/extension/README.md).
+
+**Engine internals:** see [packages/engine/README.md](packages/engine/README.md)
+for the patch model, rule list, and options. Contributor conventions live in
+[CLAUDE.md](CLAUDE.md).
+
+## Before deploying publicly
+
+- `/api/clean` and `/api/insights` are **unauthenticated**. Insights spends
+  Anthropic API credits per call — add rate limiting (e.g. Vercel WAF /
+  Upstash) or auth before exposing them.
+- Input caps exist (`/api/clean` 500k cells; insights prompt is bounded) but
+  there is no per-IP throttling yet.
+- Don't run `pnpm build` while the dev server is running — they share `.next`.
 
 ## Roadmap
 
