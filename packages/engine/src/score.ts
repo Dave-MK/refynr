@@ -8,6 +8,9 @@ import type {
 type DimensionKey = ScoreDimension["key"];
 
 const RULE_DIMENSION: Record<string, DimensionKey> = {
+  "fix-encoding": "consistency",
+  "suspect-leading-zeros": "validity",
+  "numeric-outliers": "validity",
   "invalid-email": "validity",
   "invalid-postcode": "validity",
   "invalid-phone": "validity",

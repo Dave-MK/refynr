@@ -140,6 +140,18 @@ export async function POST(request: Request) {
     if (error instanceof Anthropic.AuthenticationError) {
       return NextResponse.json({ error: MISSING_KEY_MESSAGE }, { status: 503 });
     }
+    if (
+      error instanceof Anthropic.BadRequestError &&
+      /credit balance/i.test(error.message)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Your Anthropic account has no API credits. Add credits at platform.claude.com → Plans & Billing (API billing is separate from a Claude subscription), then try again.",
+        },
+        { status: 402 },
+      );
+    }
     if (error instanceof Anthropic.RateLimitError) {
       return NextResponse.json(
         { error: "AI rate limit reached — try again in a minute." },

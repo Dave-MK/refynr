@@ -31,6 +31,7 @@ highlight them.
 
 | Rule | Fixes | Flags (advisory, never guessed) |
 |---|---|---|
+| `fix-encoding` | mojibake (UTF-8 read as CP1252: "â€™", "Ã©", "Â£") via validated reverse-decode | |
 | `trim-whitespace` | leading/trailing/repeated/invisible whitespace | |
 | `remove-duplicate-rows` | exact duplicates (case/space-insensitive) | `near-duplicate-rows` (punctuation-only differences) |
 | `remove-blank-rows` | fully empty rows | `missing-values` (gappy columns) |
@@ -39,6 +40,8 @@ highlight them.
 | `normalize-email` | case, spaces, mailto: | `invalid-email` |
 | `normalize-phone` | UK numbers → +44 conventional grouping | `invalid-phone` |
 | `normalize-postcode` | UK postcodes → Royal Mail format | `invalid-postcode` |
+| `suspect-leading-zeros` | | ID columns where Excel likely stripped leading zeros |
+| `numeric-outliers` | | values outside 3× IQR (unit mix-ups, stray decimals, placeholders) |
 
 ## Options
 

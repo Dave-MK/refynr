@@ -1,33 +1,21 @@
 import type { CellPatch, Finding } from "../types.js";
+import { cleanWhitespace, INVISIBLE_TEST_RE } from "../text.js";
+import { demojibake } from "./encoding.js";
 import { cellPatchId, n, type Fixer, type FixerOutput } from "./fixer.js";
 
 const RULE = "trim-whitespace";
 
-/** Zero-width characters: remove entirely (ZWSP, ZWNJ, ZWJ, BOM). */
-const ZERO_WIDTH_RE = new RegExp("[\\u200B\\u200C\\u200D\\uFEFF]", "g");
-
-/** Space look-alikes: replace with a plain space (NBSP, en/em spaces, etc.). */
-const ODD_SPACE_RE = new RegExp(
-  "[\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000]",
-  "g",
-);
-
-const INVISIBLE_TEST_RE = new RegExp(
-  "[\\u200B\\u200C\\u200D\\uFEFF\\u00A0\\u1680\\u2000-\\u200A\\u202F\\u205F\\u3000]",
-);
-
-export function cleanWhitespace(s: string): string {
-  return s
-    .replace(ZERO_WIDTH_RE, "")
-    .replace(ODD_SPACE_RE, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+// Re-exported for the fixers that build their patches on cleaned text.
+export { cleanWhitespace };
 
 /**
  * Trims leading/trailing whitespace, collapses runs of internal spaces,
  * and removes invisible characters (non-breaking spaces, zero-width chars)
  * — the classic "why doesn't my VLOOKUP match?" culprits.
+ *
+ * Cells with encoding corruption are skipped here: the encoding fixer owns
+ * them and its patch already includes the whitespace cleanup, so the two
+ * patches never fight over the same cell.
  */
 export const whitespaceFixer: Fixer = {
   rule: RULE,
@@ -38,6 +26,7 @@ export const whitespaceFixer: Fixer = {
     table.rows.forEach((row, r) => {
       row.forEach((v, c) => {
         if (typeof v !== "string") return;
+        if (demojibake(v) !== null) return; // owned by fix-encoding
         const cleaned = cleanWhitespace(v);
         if (cleaned === v) return;
         const hadInvisible = INVISIBLE_TEST_RE.test(v);

@@ -190,6 +190,86 @@ describe("casing tie-break", () => {
   });
 });
 
+describe("encoding repair", () => {
+  const table: Table = {
+    headers: ["Name", "Notes"],
+    rows: [
+      ["CafÃ© Rouge", "Itâ€™s fine â€” really"],
+      ["  CafÃ©  ", "normal text"],
+      ["João Café", "légitime"], // already-correct accents must be untouched
+    ],
+  };
+  const result = cleanse(table);
+  const encodingPatches = result.patches.filter(
+    (p) => p.rule === "fix-encoding",
+  ) as CellPatch[];
+
+  it("repairs UTF-8-as-CP1252 mojibake", () => {
+    const cell00 = encodingPatches.find((p) => p.cell.row === 0 && p.cell.col === 0);
+    expect(cell00!.after).toBe("Café Rouge");
+    const cell01 = encodingPatches.find((p) => p.cell.row === 0 && p.cell.col === 1);
+    // The reversal is faithful: typographic apostrophe (U+2019), not ASCII.
+    expect(cell01!.after).toBe("It’s fine — really");
+  });
+
+  it("owns whitespace cleanup for corrupted cells (no duelling patches)", () => {
+    const cell10 = encodingPatches.find((p) => p.cell.row === 1 && p.cell.col === 0);
+    expect(cell10!.after).toBe("Café");
+    const whitespaceOnSameCell = result.patches.find(
+      (p) => p.rule === "trim-whitespace" && p.kind === "cell" && p.cell.row === 1 && p.cell.col === 0,
+    );
+    expect(whitespaceOnSameCell).toBeUndefined();
+  });
+
+  it("never touches legitimate accented text", () => {
+    const row2 = result.patches.filter(
+      (p) => p.kind === "cell" && p.cell.row === 2,
+    );
+    expect(row2.length).toBe(0);
+  });
+});
+
+describe("integrity advisories", () => {
+  it("flags likely stripped leading zeros in ID columns", () => {
+    const table: Table = {
+      headers: ["Account No", "Name"],
+      rows: [
+        ["00123", "a"], ["00456", "b"], ["789", "c"], ["1234", "d"], ["00999", "e"],
+      ],
+    };
+    const finding = cleanse(table).findings.find(
+      (f) => f.rule === "suspect-leading-zeros",
+    );
+    expect(finding).toBeDefined();
+    expect(finding!.count).toBe(2); // "789" and "1234"
+    expect(finding!.patchIds).toEqual([]); // advisory — never auto-fixed
+  });
+
+  it("flags far outliers in numeric columns", () => {
+    const table: Table = {
+      headers: ["Amount"],
+      rows: [["10"], ["12"], ["11"], ["13"], ["9"], ["10"], ["12"], ["11"], ["99999"]],
+    };
+    const finding = cleanse(table).findings.find(
+      (f) => f.rule === "numeric-outliers",
+    );
+    expect(finding).toBeDefined();
+    expect(finding!.count).toBe(1);
+    expect(finding!.severity).toBe("info");
+  });
+
+  it("stays quiet on unremarkable numeric data", () => {
+    const table: Table = {
+      headers: ["Amount"],
+      rows: [["10"], ["12"], ["11"], ["13"], ["9"], ["10"], ["12"], ["11"]],
+    };
+    const finding = cleanse(table).findings.find(
+      (f) => f.rule === "numeric-outliers",
+    );
+    expect(finding).toBeUndefined();
+  });
+});
+
 describe("date order inference", () => {
   it("infers MDY when unambiguous values say so", () => {
     const table: Table = {
