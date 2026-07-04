@@ -132,37 +132,51 @@ export function App() {
 
           <div className="card">
             <h3 className="section-title">
-              Findings ({session.result.findings.length})
+              <span>Findings ({session.result.findings.length})</span>
+              <span className="applied-count">{enabled.size} applied</span>
             </h3>
             {session.result.findings.length === 0 && (
               <p className="hint">No issues found — this data looks clean.</p>
             )}
-            {session.result.findings.map((f, i) => (
-              <div className="finding" key={`${f.rule}-${i}`}>
-                <span className={`dot dot-${f.severity}`} />
-                <div>
-                  <div className="finding-title">{f.title}</div>
-                  <div className="finding-detail">{f.detail}</div>
+            {session.result.findings.map((f, i) => {
+              const fixable = f.patchIds.length > 0;
+              const pill = fixable
+                ? { cls: "pill-fixable", text: "Fixable" }
+                : f.severity === "info"
+                  ? { cls: "pill-info", text: "Info" }
+                  : { cls: "pill-advisory", text: "Advisory" };
+              return (
+                <div className="finding" key={`${f.rule}-${i}`}>
+                  <span className={`dot dot-${f.severity}`} />
+                  <div>
+                    <div className="finding-title">
+                      {f.title}
+                      <span className={`pill ${pill.cls}`}>{pill.text}</span>
+                    </div>
+                    <div className="finding-detail">{f.detail}</div>
+                  </div>
+                  {fixable ? (
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={enabled.has(i)}
+                        onChange={() =>
+                          setEnabled((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(i)) next.delete(i);
+                            else next.add(i);
+                            return next;
+                          })
+                        }
+                      />
+                      apply
+                    </label>
+                  ) : (
+                    <span className="review">review</span>
+                  )}
                 </div>
-                {f.patchIds.length > 0 && (
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={enabled.has(i)}
-                      onChange={() =>
-                        setEnabled((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(i)) next.delete(i);
-                          else next.add(i);
-                          return next;
-                        })
-                      }
-                    />
-                    Apply
-                  </label>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="row">
