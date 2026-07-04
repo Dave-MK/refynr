@@ -13,6 +13,9 @@ import { duplicateFixer } from "./fixers/duplicates.js";
 import { completenessFixer } from "./fixers/completeness.js";
 import { encodingFixer } from "./fixers/encoding.js";
 import { integrityFixer } from "./fixers/integrity.js";
+import { numberFixer } from "./fixers/numbers.js";
+import { booleanFixer } from "./fixers/booleans.js";
+import { headerFixer } from "./fixers/headers.js";
 
 export * from "./types.js";
 export { profileTable } from "./profile.js";
@@ -27,12 +30,15 @@ const DEFAULT_OPTIONS: Required<EngineOptions> = {
 
 /** Registration order = execution order = display order of findings. */
 const FIXERS: Fixer[] = [
+  headerFixer,
   encodingFixer,
   whitespaceFixer,
   duplicateFixer,
   completenessFixer,
   casingFixer,
   dateFixer,
+  numberFixer,
+  booleanFixer,
   emailFixer,
   phoneFixer,
   postcodeFixer,

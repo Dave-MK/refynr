@@ -1,32 +1,90 @@
-import { cellText, type CellPatch, type Table } from "@refynr/engine";
+import { useEffect, useState } from "react";
+import { cellText, type CellPatch, type CellValue, type Table } from "@refynr/engine";
 
 export type ViewMode = "original" | "diff" | "cleaned";
 
+/** An advisory / editable cell: `flagged` = still failing a rule (amber). */
+export interface EditableCell {
+  label: string;
+  flagged: boolean;
+}
+
 const ROW_CAP = 300;
 
+/** Inline editable cell — commits on blur or Enter, reverts on Escape. */
+function CellEditor({
+  value,
+  flagged,
+  title,
+  onCommit,
+}: {
+  value: string;
+  flagged: boolean;
+  title: string;
+  onCommit: (next: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+
+  const border = flagged
+    ? "border-amber/60 focus:border-amber"
+    : "border-grape/60 focus:border-grape";
+
+  return (
+    <input
+      value={draft}
+      title={flagged ? `${title} — edit to fix` : "Edited manually"}
+      autoComplete="off"
+      autoCorrect="off"
+      autoCapitalize="off"
+      spellCheck={false}
+      data-1p-ignore
+      data-lpignore="true"
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => draft !== value && onCommit(draft)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          (e.target as HTMLInputElement).blur();
+        } else if (e.key === "Escape") {
+          setDraft(value);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className={`w-full min-w-[7rem] rounded border bg-inset px-1.5 py-0.5 font-mono text-[12px] text-body outline-none focus:ring-1 ${flagged ? "focus:ring-amber/30" : "focus:ring-grape/30"} ${border}`}
+    />
+  );
+}
+
 export function DataTable({
-  table,
+  original,
+  working,
   cleaned,
   cellPatches,
   removedRows,
-  advisoryCells,
+  editableCells,
+  headerPatches,
   mode,
+  onEditCell,
 }: {
-  /** The untouched original. */
-  table: Table;
-  /** Original + accepted patches (for the "cleaned" view). */
+  /** The untouched upload. */
+  original: Table;
+  /** original + manual edits — the base the Changes view diffs against. */
+  working: Table;
+  /** working + accepted patches — the download. */
   cleaned: Table;
   /** Accepted cell patches keyed by "row:col" (original coordinates). */
   cellPatches: Map<string, CellPatch>;
   /** Original row indices with an accepted removal patch. */
   removedRows: Set<number>;
-  /** Advisory cells keyed by "row:col" → finding title (amber highlight). */
-  advisoryCells: Map<string, string>;
+  /** Advisory / manually-edited cells keyed "row:col" → render as editors. */
+  editableCells: Map<string, EditableCell>;
+  /** Accepted header renames, keyed by column index. */
+  headerPatches: Map<number, { before: string; after: string }>;
   mode: ViewMode;
+  onEditCell: (row: number, col: number, value: CellValue) => void;
 }) {
-  const source = mode === "cleaned" ? cleaned : table;
+  const source = mode === "cleaned" ? cleaned : mode === "diff" ? working : original;
   const rows = source.rows.slice(0, ROW_CAP);
-  const showMarks = mode !== "cleaned";
 
   return (
     <section className="overflow-hidden rounded-2xl border border-line bg-card">
@@ -37,14 +95,24 @@ export function DataTable({
               <th className="w-12 px-3 py-2.5 text-right text-[10px] font-semibold tracking-[0.15em] text-dim">
                 #
               </th>
-              {source.headers.map((h, i) => (
-                <th
-                  key={i}
-                  className="whitespace-nowrap px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-mut"
-                >
-                  {h}
-                </th>
-              ))}
+              {source.headers.map((h, i) => {
+                const hp = mode === "diff" ? headerPatches.get(i) : undefined;
+                return (
+                  <th
+                    key={i}
+                    title={hp ? `Renamed to "${hp.after}"` : undefined}
+                    className="whitespace-nowrap px-3 py-2.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-mut"
+                  >
+                    {hp ? (
+                      <span className="text-teal underline decoration-teal/50 decoration-dotted underline-offset-4">
+                        {h}
+                      </span>
+                    ) : (
+                      h
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-line/40">
@@ -78,21 +146,26 @@ export function DataTable({
                         </td>
                       );
                     }
-                    const advisory = showMarks && !removed ? advisoryCells.get(key) : undefined;
-                    const text = cellText(v);
+                    const editable =
+                      mode === "diff" && !removed ? editableCells.get(key) : undefined;
+                    if (editable) {
+                      return (
+                        <td key={c} className="px-2 py-1.5">
+                          <CellEditor
+                            value={cellText(v)}
+                            flagged={editable.flagged}
+                            title={editable.label}
+                            onCommit={(next) => onEditCell(r, c, next === "" ? null : next)}
+                          />
+                        </td>
+                      );
+                    }
                     return (
                       <td
                         key={c}
                         className={`whitespace-nowrap px-3 py-2 ${removed ? "text-mut" : "text-body"}`}
-                        title={advisory}
                       >
-                        {advisory ? (
-                          <span className="text-amber underline decoration-amber/60 decoration-dotted underline-offset-4">
-                            {text || "∅"}
-                          </span>
-                        ) : (
-                          text || (removed ? "∅" : "")
-                        )}
+                        {cellText(v) || (removed ? "∅" : "")}
                       </td>
                     );
                   })}

@@ -31,8 +31,11 @@ highlight them.
 
 | Rule | Fixes | Flags (advisory, never guessed) |
 |---|---|---|
+| `header-hygiene` | trims and de-duplicates column-header names | |
 | `fix-encoding` | mojibake (UTF-8 read as CP1252: "â€™", "Ã©", "Â£") via validated reverse-decode | |
 | `trim-whitespace` | leading/trailing/repeated/invisible whitespace | |
+| `normalize-number` | currency symbols, thousands separators, accountancy parens → plain number | |
+| `normalize-boolean` | mixed Yes/Y/TRUE/1 spellings → the column's dominant pair | |
 | `remove-duplicate-rows` | exact duplicates (case/space-insensitive) | `near-duplicate-rows` (punctuation-only differences) |
 | `remove-blank-rows` | fully empty rows | `missing-values` (gappy columns) |
 | `consistent-casing` | case-only variants → most frequent spelling | |

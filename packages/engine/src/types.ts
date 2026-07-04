@@ -41,7 +41,15 @@ export interface RowRemovalPatch extends PatchBase {
   duplicateOf?: number;
 }
 
-export type Patch = CellPatch | RowRemovalPatch;
+/** A proposed change to a column header (trim, dedupe). */
+export interface HeaderPatch extends PatchBase {
+  kind: "header";
+  col: number;
+  before: string;
+  after: string;
+}
+
+export type Patch = CellPatch | RowRemovalPatch | HeaderPatch;
 
 export type Severity = "info" | "warning" | "error";
 

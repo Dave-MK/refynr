@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyPatches,
+  cleanse,
   type CellPatch,
+  type CellValue,
   type CleanseResult,
+  type Finding,
   type Table,
 } from "@refynr/engine";
 import type {
@@ -14,20 +17,31 @@ import type {
 import { AiSummary } from "@/components/AiSummary";
 import { ScoreCard } from "@/components/ScoreCard";
 import { FindingsPanel } from "@/components/FindingsPanel";
-import { DataTable, type ViewMode } from "@/components/DataTable";
+import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
 import { downloadCsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
 import { SAMPLE_DATA } from "@/lib/sample";
 
-interface Session {
-  table: Table;
-  result: CleanseResult;
+/** Stable identity for a finding across re-cleanses (rule + optional column). */
+const findingKey = (f: Finding): string => `${f.rule}:${f.column ?? ""}`;
+
+function applyManualEdits(base: Table, edits: Map<string, CellValue>): Table {
+  if (edits.size === 0) return base;
+  const rows = base.rows.map((r) => [...r]);
+  for (const [key, value] of edits) {
+    const [r, c] = key.split(":").map(Number);
+    const row = rows[r!];
+    if (row && c! < row.length) row[c!] = value;
+  }
+  return { headers: base.headers, rows };
 }
 
 export default function Home() {
   const [pasted, setPasted] = useState("");
-  const [session, setSession] = useState<Session | null>(null);
-  const [enabledFindings, setEnabledFindings] = useState<Set<number>>(new Set());
+  const [base, setBase] = useState<{ table: Table; result: CleanseResult } | null>(null);
+  const [manualEdits, setManualEdits] = useState<Map<string, CellValue>>(new Map());
+  // Findings the user has un-ticked, keyed stably so choices survive re-cleanse.
+  const [disabled, setDisabled] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<ViewMode>("diff");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,16 +58,9 @@ export default function Home() {
         setError(`Couldn't read that data: ${e.data.error}`);
         return;
       }
-      const { table, result } = e.data;
-      setSession({ table, result });
-      // Every fixable finding starts enabled — the user unticks what they don't want.
-      setEnabledFindings(
-        new Set(
-          result.findings
-            .map((f, i) => (f.patchIds.length > 0 ? i : -1))
-            .filter((i) => i >= 0),
-        ),
-      );
+      setBase({ table: e.data.table, result: e.data.result });
+      setManualEdits(new Map());
+      setDisabled(new Set());
       setMode("diff");
       setError(null);
     };
@@ -84,48 +91,107 @@ export default function Home() {
     [analyse, submit],
   );
 
-  const accepted = useMemo(() => {
-    if (!session) {
-      return {
-        ids: new Set<string>(),
-        cellPatches: new Map<string, CellPatch>(),
-        removedRows: new Set<number>(),
-      };
-    }
-    const ids = new Set<string>();
-    session.result.findings.forEach((f, i) => {
-      if (enabledFindings.has(i)) for (const id of f.patchIds) ids.add(id);
+  // original + manual edits — the working table everything derives from.
+  const working = useMemo(
+    () => (base ? applyManualEdits(base.table, manualEdits) : null),
+    [base, manualEdits],
+  );
+
+  // Re-cleanse on the main thread once the user has made manual edits, so the
+  // score, findings and cleaned output all update live. The initial (unedited)
+  // result comes from the worker so large files never block the first paint.
+  const result = useMemo(() => {
+    if (!base) return null;
+    return manualEdits.size === 0 ? base.result : cleanse(working!);
+  }, [base, manualEdits, working]);
+
+  // Which finding indices are currently accepted (fixable and not un-ticked).
+  const enabledIndices = useMemo(() => {
+    const set = new Set<number>();
+    result?.findings.forEach((f, i) => {
+      if (f.patchIds.length > 0 && !disabled.has(findingKey(f))) set.add(i);
     });
+    return set;
+  }, [result, disabled]);
+
+  const accepted = useMemo(() => {
+    const ids = new Set<string>();
     const cellPatches = new Map<string, CellPatch>();
     const removedRows = new Set<number>();
-    for (const p of session.result.patches) {
+    const headerPatches = new Map<number, { before: string; after: string }>();
+    if (!result) return { ids, cellPatches, removedRows, headerPatches };
+
+    result.findings.forEach((f, i) => {
+      if (enabledIndices.has(i)) for (const id of f.patchIds) ids.add(id);
+    });
+    for (const p of result.patches) {
       if (!ids.has(p.id)) continue;
       if (p.kind === "cell") cellPatches.set(`${p.cell.row}:${p.cell.col}`, p);
-      else removedRows.add(p.row);
+      else if (p.kind === "remove-row") removedRows.add(p.row);
+      else if (p.kind === "header")
+        headerPatches.set(p.col, { before: p.before, after: p.after });
     }
-    return { ids, cellPatches, removedRows };
-  }, [session, enabledFindings]);
+    return { ids, cellPatches, removedRows, headerPatches };
+  }, [result, enabledIndices]);
 
-  /** Advisory (non-fixable) finding cells → amber underline in the table. */
-  const advisoryCells = useMemo(() => {
-    const map = new Map<string, string>();
-    if (!session) return map;
-    for (const f of session.result.findings) {
+  // Advisory cells (still flagged) + any cell the user has manually edited —
+  // both render as inline editors in the Changes view.
+  const editableCells = useMemo(() => {
+    const map = new Map<string, EditableCell>();
+    if (!result) return map;
+    for (const f of result.findings) {
       if (f.patchIds.length > 0 || !f.cells) continue;
-      for (const cell of f.cells) map.set(`${cell.row}:${cell.col}`, f.title);
+      for (const cell of f.cells) {
+        map.set(`${cell.row}:${cell.col}`, { label: f.title, flagged: true });
+      }
+    }
+    for (const key of manualEdits.keys()) {
+      if (!map.has(key)) map.set(key, { label: "Edited manually", flagged: false });
     }
     return map;
-  }, [session]);
+  }, [result, manualEdits]);
 
   const cleaned = useMemo(
     () =>
-      session
-        ? applyPatches(session.table, session.result.patches, accepted.ids)
+      working && result
+        ? applyPatches(working, result.patches, accepted.ids)
         : { headers: [], rows: [] },
-    [session, accepted],
+    [working, result, accepted],
   );
 
-  const acceptedCount = accepted.cellPatches.size + accepted.removedRows.size;
+  const onEditCell = useCallback(
+    (row: number, col: number, value: CellValue) => {
+      if (!base) return;
+      const key = `${row}:${col}`;
+      const originalValue = base.table.rows[row]?.[col] ?? null;
+      setManualEdits((prev) => {
+        const next = new Map(prev);
+        // Reverting to the original value drops the manual edit entirely.
+        if (value === originalValue) next.delete(key);
+        else next.set(key, value);
+        return next;
+      });
+    },
+    [base],
+  );
+
+  const toggleFinding = useCallback(
+    (index: number) => {
+      const f = result?.findings[index];
+      if (!f) return;
+      const key = findingKey(f);
+      setDisabled((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      });
+    },
+    [result],
+  );
+
+  const acceptedCount = accepted.cellPatches.size + accepted.removedRows.size + accepted.headerPatches.size;
+  const manualCount = manualEdits.size;
 
   return (
     <main className="mx-auto max-w-[960px] px-5 py-8">
@@ -137,10 +203,10 @@ export default function Home() {
           <span className="hidden rounded-full border border-line2 bg-card px-3.5 py-1.5 font-mono text-[11px] text-mut sm:inline-flex">
             runs in your browser
           </span>
-          {session && (
+          {base && (
             <button
               onClick={() => {
-                setSession(null);
+                setBase(null);
                 setPasted("");
               }}
               className="font-mono text-xs text-dim transition hover:text-body"
@@ -151,7 +217,7 @@ export default function Home() {
         </div>
       </header>
 
-      {!session && (
+      {!base && (
         <section className="rounded-2xl border border-line bg-card p-8">
           <h2 className="text-lg font-semibold text-hi">
             Paste data or upload a spreadsheet
@@ -206,26 +272,16 @@ export default function Home() {
         </section>
       )}
 
-      {session && (
+      {base && working && result && (
         <div className="space-y-5">
-          <ScoreCard
-            score={session.result.score}
-            projected={session.result.projectedScore}
-          />
+          <ScoreCard score={result.score} projected={result.projectedScore} />
 
-          <AiSummary profile={session.result.profile} result={session.result} />
+          <AiSummary profile={result.profile} result={result} />
 
           <FindingsPanel
-            findings={session.result.findings}
-            enabled={enabledFindings}
-            onToggle={(i) =>
-              setEnabledFindings((prev) => {
-                const next = new Set(prev);
-                if (next.has(i)) next.delete(i);
-                else next.add(i);
-                return next;
-              })
-            }
+            findings={result.findings}
+            enabled={enabledIndices}
+            onToggle={toggleFinding}
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -267,17 +323,22 @@ export default function Home() {
           </div>
 
           <DataTable
-            table={session.table}
+            original={base.table}
+            working={working}
             cleaned={cleaned}
             cellPatches={accepted.cellPatches}
             removedRows={accepted.removedRows}
-            advisoryCells={advisoryCells}
+            editableCells={editableCells}
+            headerPatches={accepted.headerPatches}
             mode={mode}
+            onEditCell={onEditCell}
           />
 
           <p className="pb-8 text-center font-mono text-[11px] leading-relaxed text-dim">
-            Hover any changed cell to see why. Your original data is never
-            modified — refynr only ever exports a copy.
+            {manualCount > 0
+              ? `${manualCount} manual edit${manualCount === 1 ? "" : "s"} applied and re-scored live. `
+              : "Amber cells in Changes are advisory — edit them to fix by hand and watch the score update. "}
+            Your original data is never modified — refynr only ever exports a copy.
           </p>
         </div>
       )}

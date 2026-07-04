@@ -29,6 +29,33 @@ body {
   font-family: Arial, Helvetica, system-ui, sans-serif;
 }
 
+/* Scrollbars on-theme with the dark console (Firefox) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #33405f transparent;
+}
+
+/* Scrollbars on-theme (WebKit / Chromium) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3450;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a476b;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* mono section label, e.g. "PROCESSING PIPELINE" */
 .label {
   @apply font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-mut;

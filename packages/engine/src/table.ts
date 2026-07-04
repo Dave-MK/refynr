@@ -25,11 +25,14 @@ export function applyPatches(
     : patches;
 
   const rows = table.rows.map((r) => [...r]);
+  const headers = [...table.headers];
 
   for (const p of accepted) {
     if (p.kind === "cell") {
       const row = rows[p.cell.row];
       if (row !== undefined) row[p.cell.col] = p.after;
+    } else if (p.kind === "header") {
+      if (p.col >= 0 && p.col < headers.length) headers[p.col] = p.after;
     }
   }
 
@@ -38,10 +41,8 @@ export function applyPatches(
   );
 
   return {
-    headers: [...table.headers],
-    rows: removals.size
-      ? rows.filter((_, i) => !removals.has(i))
-      : rows,
+    headers,
+    rows: removals.size ? rows.filter((_, i) => !removals.has(i)) : rows,
   };
 }
 

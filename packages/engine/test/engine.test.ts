@@ -237,6 +237,91 @@ describe("encoding repair", () => {
   });
 });
 
+describe("number-stored-as-text", () => {
+  const table: Table = {
+    headers: ["Spend"],
+    rows: [["£1,200"], ["1,234.50"], ["(500)"], ["£90"], ["300"], ["75.5"]],
+  };
+  const patches = cleanse(table).patches.filter(
+    (p) => p.rule === "normalize-number",
+  ) as CellPatch[];
+
+  it("strips currency symbols and thousands separators", () => {
+    expect(patches.find((p) => p.cell.row === 0)!.after).toBe("1200");
+    expect(patches.find((p) => p.cell.row === 1)!.after).toBe("1234.50");
+    expect(patches.find((p) => p.cell.row === 3)!.after).toBe("90");
+  });
+  it("converts accountancy parens to negatives", () => {
+    expect(patches.find((p) => p.cell.row === 2)!.after).toBe("-500");
+  });
+  it("leaves already-plain numbers alone", () => {
+    expect(patches.find((p) => p.cell.row === 4)).toBeUndefined();
+    expect(patches.find((p) => p.cell.row === 5)).toBeUndefined();
+  });
+  it("ignores a stray currency symbol in a non-numeric column", () => {
+    const notes: Table = {
+      headers: ["Note"],
+      rows: [["paid £50 cash"], ["invoice sent"], ["called twice"], ["n/a"]],
+    };
+    const p = cleanse(notes).patches.filter((x) => x.rule === "normalize-number");
+    expect(p.length).toBe(0);
+  });
+});
+
+describe("boolean standardisation", () => {
+  it("normalises mixed yes/no spellings to the column's dominant token", () => {
+    const table: Table = {
+      headers: ["Active", "Ref"],
+      rows: [
+        ["Yes", "a"], ["yes", "b"], ["Y", "c"], ["No", "d"], ["no", "e"], ["N", "f"],
+      ],
+    };
+    const patches = cleanse(table).patches.filter(
+      (p) => p.rule === "normalize-boolean",
+    ) as CellPatch[];
+    // "Yes" (x1) is the only capitalised true form → wins over "yes"/"Y".
+    for (const p of patches) {
+      expect(["Yes", "No"]).toContain(p.after);
+    }
+    expect(patches.some((p) => p.before === "Y" && p.after === "Yes")).toBe(true);
+    expect(patches.some((p) => p.before === "no" && p.after === "No")).toBe(true);
+  });
+
+  it("does not treat a numeric 0/1 column as boolean", () => {
+    const table: Table = {
+      headers: ["Count"],
+      rows: [["0"], ["1"], ["1"], ["0"], ["1"], ["0"]],
+    };
+    const patches = cleanse(table).patches.filter(
+      (p) => p.rule === "normalize-boolean",
+    );
+    expect(patches.length).toBe(0);
+  });
+});
+
+describe("header hygiene", () => {
+  it("trims header whitespace and de-duplicates names", () => {
+    const table: Table = {
+      headers: ["Name ", "Email", "Email"],
+      rows: [["A", "a@x.io", "a2@x.io"]],
+    };
+    const result = cleanse(table);
+    const headerPatches = result.patches.filter((p) => p.kind === "header");
+    expect(headerPatches.length).toBe(2);
+    const cleaned = applyPatches(table, result.patches);
+    expect(cleaned.headers).toEqual(["Name", "Email", "Email (2)"]);
+  });
+
+  it("leaves clean unique headers untouched", () => {
+    const table: Table = {
+      headers: ["Name", "Email", "Joined"],
+      rows: [["A", "a@x.io", "2024-01-01"]],
+    };
+    const headerPatches = cleanse(table).patches.filter((p) => p.kind === "header");
+    expect(headerPatches.length).toBe(0);
+  });
+});
+
 describe("health scoring", () => {
   // A sheet that is messy in fixable ways (dupes, casing, whitespace, formats)
   // plus a couple of unfixable advisories (invalid email, impossible date).
