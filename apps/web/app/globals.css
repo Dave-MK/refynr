@@ -1,9 +1,44 @@
 @import "tailwindcss";
 
-:root {
-  --refynr-accent: #0d9488;
+/* refynr dark console theme — tokens lifted from Refynr_App.pptx */
+@theme {
+  --color-ink: #0c1120;        /* page background */
+  --color-card: #121a2e;       /* primary card */
+  --color-card2: #1c2740;      /* secondary card */
+  --color-inset: #0a0f1e;      /* inset rows / wells */
+  --color-aicard: #1c183a;     /* AI card (purple tint) */
+  --color-ailine: #2a2450;     /* AI card border */
+  --color-line: #232f4d;       /* borders */
+  --color-line2: #33405f;      /* stronger borders */
+  --color-hi: #eaf0ff;         /* brightest text */
+  --color-body: #c3cbe0;       /* body text */
+  --color-mut: #8b96b5;        /* muted */
+  --color-dim: #5b6788;        /* dimmest */
+  --color-teal: #2dd4bf;
+  --color-cyan: #38e1f0;
+  --color-coral: #ff6b81;
+  --color-amber: #ffc24b;
+  --color-grape: #b39cff;
+  --color-mint: #3ee0a0;
+
+  --font-mono: ui-monospace, "Cascadia Mono", "Courier New", monospace;
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply bg-ink text-body antialiased;
+  font-family: Arial, Helvetica, system-ui, sans-serif;
+}
+
+/* mono section label, e.g. "PROCESSING PIPELINE" */
+.label {
+  @apply font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-mut;
+}
+
+/* severity / status pill */
+.pill {
+  @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-mono text-[10px] font-semibold tracking-wider;
+}
+
+.glow-teal {
+  filter: drop-shadow(0 0 6px rgba(45, 212, 191, 0.55));
 }

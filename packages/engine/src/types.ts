@@ -57,6 +57,8 @@ export interface Finding {
   count: number;
   /** Column index if the finding is column-scoped. */
   column?: number;
+  /** Cells this finding refers to (advisory findings — lets UIs highlight them). */
+  cells?: CellRef[];
   /** Ids of patches that resolve this finding (empty = advisory only). */
   patchIds: string[];
 }

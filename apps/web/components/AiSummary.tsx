@@ -4,10 +4,10 @@ import { useState } from "react";
 import type { CleanseResult, TableProfile } from "@refynr/engine";
 import type { InsightResponse } from "@/app/api/insights/route";
 
-const RISK_STYLE: Record<InsightResponse["riskLevel"], string> = {
-  low: "bg-teal-50 text-teal-700 border-teal-200",
-  medium: "bg-amber-50 text-amber-700 border-amber-200",
-  high: "bg-rose-50 text-rose-700 border-rose-200",
+const RISK_PILL: Record<InsightResponse["riskLevel"], string> = {
+  low: "border-teal/30 bg-teal/10 text-teal",
+  medium: "border-amber/30 bg-amber/10 text-amber",
+  high: "border-coral/30 bg-coral/10 text-coral",
 };
 
 export function AiSummary({
@@ -54,31 +54,32 @@ export function AiSummary({
   };
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
-          AI insights
-        </h2>
+    <section className="rounded-2xl border border-ailine bg-aicard p-6">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <span className="glow-teal text-sm text-grape" aria-hidden>
+            ✦
+          </span>
+          <h2 className="label !text-grape">AI insights</h2>
+        </div>
         {state.status === "done" && (
-          <span
-            className={`rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${RISK_STYLE[state.insights.riskLevel]}`}
-          >
+          <span className={`pill ${RISK_PILL[state.insights.riskLevel]}`}>
             {state.insights.riskLevel} risk
           </span>
         )}
       </div>
 
-      <div className="px-6 py-5">
+      <div className="mt-4">
         {state.status === "idle" && (
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-slate-500">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className="max-w-xl text-sm leading-relaxed text-mut">
               Get an executive summary and recommendations from Claude. Only
               column statistics and a handful of sample values are sent — never
               your full dataset.
             </p>
             <button
               onClick={() => void generate()}
-              className="shrink-0 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-violet-700"
+              className="shrink-0 rounded-lg border border-grape/40 bg-grape/15 px-4 py-2 font-mono text-xs font-semibold tracking-wide text-grape transition hover:bg-grape/25"
             >
               Generate AI summary
             </button>
@@ -86,17 +87,17 @@ export function AiSummary({
         )}
 
         {state.status === "loading" && (
-          <p className="animate-pulse text-sm text-slate-400">
-            Claude is reading the column profiles…
+          <p className="animate-pulse font-mono text-xs text-grape/70">
+            › Claude is reading the column profiles…
           </p>
         )}
 
         {state.status === "error" && (
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-rose-600">{state.message}</p>
+            <p className="text-sm text-coral">{state.message}</p>
             <button
               onClick={() => void generate()}
-              className="shrink-0 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              className="shrink-0 rounded-lg border border-line2 px-4 py-2 font-mono text-xs text-mut transition hover:text-body"
             >
               Try again
             </button>
@@ -105,20 +106,18 @@ export function AiSummary({
 
         {state.status === "done" && (
           <div className="space-y-4">
-            <p className="leading-relaxed text-slate-700">
+            <p className="text-[15px] leading-relaxed text-hi">
               {state.insights.summary}
             </p>
-            <p className="text-sm italic text-slate-500">
+            <p className="text-sm italic leading-relaxed text-grape/80">
               {state.insights.likelyOrigin}
             </p>
-            <div>
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                Recommended next steps
-              </h3>
-              <ol className="space-y-1.5">
+            <div className="pt-1">
+              <h3 className="label mb-3 !text-[10px]">Recommended next steps</h3>
+              <ol className="space-y-2">
                 {state.insights.recommendations.map((r, i) => (
-                  <li key={i} className="flex gap-2 text-sm text-slate-600">
-                    <span className="font-medium text-violet-500">{i + 1}.</span>
+                  <li key={i} className="flex gap-3 text-sm leading-relaxed text-body">
+                    <span className="font-mono font-semibold text-grape">{i + 1}</span>
                     {r}
                   </li>
                 ))}
@@ -127,6 +126,6 @@ export function AiSummary({
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

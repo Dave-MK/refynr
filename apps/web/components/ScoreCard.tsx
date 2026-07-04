@@ -1,43 +1,44 @@
 import type { HealthScore } from "@refynr/engine";
 
-function ringColor(score: number): string {
-  if (score >= 85) return "text-teal-600";
-  if (score >= 60) return "text-amber-500";
-  return "text-rose-500";
+function toneText(score: number): string {
+  if (score >= 85) return "text-teal";
+  if (score >= 60) return "text-amber";
+  return "text-coral";
 }
 
-function barColor(score: number): string {
-  if (score >= 85) return "bg-teal-500";
-  if (score >= 60) return "bg-amber-400";
-  return "bg-rose-400";
+function toneBar(score: number): string {
+  if (score >= 80) return "bg-mint";
+  if (score >= 60) return "bg-amber";
+  return "bg-coral";
 }
 
-function Ring({ score, label }: { score: number; label: string }) {
+function Ring({ score, label, glow }: { score: number; label: string; glow?: boolean }) {
   const r = 44;
   const c = 2 * Math.PI * r;
+  const tone = toneText(score);
   return (
-    <div className="flex flex-col items-center gap-1">
-      <div className="relative h-28 w-28">
+    <div className="flex flex-col items-center gap-2">
+      <div className={`relative h-28 w-28 ${glow ? "glow-teal" : ""}`}>
         <svg viewBox="0 0 100 100" className="h-full w-full -rotate-90">
           <circle
             cx="50" cy="50" r={r} fill="none"
-            className="stroke-slate-200" strokeWidth="8"
+            className="stroke-inset" strokeWidth="9"
           />
           <circle
             cx="50" cy="50" r={r} fill="none"
-            className={`${ringColor(score)} stroke-current transition-all duration-700`}
-            strokeWidth="8" strokeLinecap="round"
+            className={`${tone} stroke-current transition-all duration-700`}
+            strokeWidth="9" strokeLinecap="round"
             strokeDasharray={c}
             strokeDashoffset={c * (1 - score / 100)}
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
-          <span className={`text-3xl font-semibold ${ringColor(score)}`}>
-            {score}
-          </span>
+          <span className={`text-[34px] font-bold tabular-nums ${tone}`}>{score}</span>
         </div>
       </div>
-      <span className="text-xs font-medium text-slate-500">{label}</span>
+      <span className="font-mono text-[11px] uppercase tracking-[0.15em] text-dim">
+        {label}
+      </span>
     </div>
   );
 }
@@ -49,37 +50,46 @@ export function ScoreCard({
   score: HealthScore;
   projected: HealthScore;
 }) {
+  const delta = projected.overall - score.overall;
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-        Data health
-      </h2>
-      <div className="flex items-center gap-6">
-        <Ring score={score.overall} label="Now" />
-        <div className="text-2xl text-slate-300" aria-hidden>
-          →
+    <section className="rounded-2xl border border-line bg-card p-6">
+      <div className="mb-6 flex items-center justify-between">
+        <h2 className="label">Data health</h2>
+        {delta > 0 && (
+          <span className="font-mono text-xs font-semibold text-teal">
+            +{delta} projected
+          </span>
+        )}
+      </div>
+      <div className="flex flex-col items-center gap-8 sm:flex-row">
+        <div className="flex items-center gap-6">
+          <Ring score={score.overall} label="now" />
+          <Ring score={projected.overall} label="after fixes" glow />
         </div>
-        <Ring score={projected.overall} label="After fixes" />
-        <div className="ml-4 flex-1 space-y-3">
+        <div className="w-full flex-1 space-y-4">
           {score.dimensions.map((d) => (
             <div key={d.key}>
-              <div className="mb-1 flex justify-between text-xs">
-                <span className="font-medium text-slate-600">{d.label}</span>
-                <span className="text-slate-400">
+              <div className="mb-1.5 flex items-baseline justify-between">
+                <span className="text-[13px] font-semibold text-hi">{d.label}</span>
+                <span className="font-mono text-[11px] text-mut">
                   {d.score}
-                  {d.issues > 0 && ` · ${d.issues} issue${d.issues === 1 ? "" : "s"}`}
+                  {d.issues > 0 && (
+                    <span className="text-dim">
+                      {" "}· {d.issues} issue{d.issues === 1 ? "" : "s"}
+                    </span>
+                  )}
                 </span>
               </div>
-              <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-2 overflow-hidden rounded-full bg-inset">
                 <div
-                  className={`h-full rounded-full ${barColor(d.score)} transition-all duration-700`}
-                  style={{ width: `${d.score}%` }}
+                  className={`h-full rounded-full ${toneBar(d.score)} transition-all duration-700`}
+                  style={{ width: `${Math.max(3, d.score)}%` }}
                 />
               </div>
             </div>
           ))}
         </div>
       </div>
-    </div>
+    </section>
   );
 }

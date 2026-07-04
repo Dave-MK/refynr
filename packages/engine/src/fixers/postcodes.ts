@@ -72,6 +72,7 @@ export const postcodeFixer: Fixer = {
         detail: `${n(invalid.length, "value")} in postcode columns ${invalid.length === 1 ? "doesn't" : "don't"} match any valid UK postcode format, e.g. ${samples}. These may be typos or non-UK addresses — review manually.`,
         count: invalid.length,
         column: invalid[0]!.col,
+        cells: invalid.map((c) => ({ row: c.row, col: c.col })),
         patchIds: [],
       });
     }

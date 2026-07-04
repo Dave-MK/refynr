@@ -12,6 +12,7 @@ import type {
   CleanseResponse,
 } from "@/workers/cleanse.worker";
 import { AiSummary } from "@/components/AiSummary";
+import { Pipeline } from "@/components/Pipeline";
 import { ScoreCard } from "@/components/ScoreCard";
 import { FindingsPanel } from "@/components/FindingsPanel";
 import { DataTable, type ViewMode } from "@/components/DataTable";
@@ -85,7 +86,13 @@ export default function Home() {
   );
 
   const accepted = useMemo(() => {
-    if (!session) return { ids: new Set<string>(), cellPatches: new Map<string, CellPatch>(), removedRows: new Set<number>() };
+    if (!session) {
+      return {
+        ids: new Set<string>(),
+        cellPatches: new Map<string, CellPatch>(),
+        removedRows: new Set<number>(),
+      };
+    }
     const ids = new Set<string>();
     session.result.findings.forEach((f, i) => {
       if (enabledFindings.has(i)) for (const id of f.patchIds) ids.add(id);
@@ -100,6 +107,17 @@ export default function Home() {
     return { ids, cellPatches, removedRows };
   }, [session, enabledFindings]);
 
+  /** Advisory (non-fixable) finding cells → amber underline in the table. */
+  const advisoryCells = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!session) return map;
+    for (const f of session.result.findings) {
+      if (f.patchIds.length > 0 || !f.cells) continue;
+      for (const cell of f.cells) map.set(`${cell.row}:${cell.col}`, f.title);
+    }
+    return map;
+  }, [session]);
+
   const cleaned = useMemo(
     () =>
       session
@@ -111,55 +129,55 @@ export default function Home() {
   const acceptedCount = accepted.cellPatches.size + accepted.removedRows.size;
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-10">
-      <header className="mb-10 flex items-baseline justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            refynr<span className="text-teal-600">.</span>
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Non-destructive spreadsheet quality — see every change before you accept it.
-          </p>
+    <main className="mx-auto max-w-[960px] px-5 py-8">
+      <header className="mb-8 flex items-center justify-between">
+        <h1 className="text-[22px] font-bold tracking-tight text-hi">
+          refynr<span className="text-teal">.</span>
+        </h1>
+        <div className="flex items-center gap-5">
+          <span className="hidden rounded-full border border-line2 bg-card px-3.5 py-1.5 font-mono text-[11px] text-mut sm:inline-flex">
+            runs in your browser
+          </span>
+          {session && (
+            <button
+              onClick={() => {
+                setSession(null);
+                setPasted("");
+              }}
+              className="font-mono text-xs text-dim transition hover:text-body"
+            >
+              start over
+            </button>
+          )}
         </div>
-        {session && (
-          <button
-            onClick={() => {
-              setSession(null);
-              setPasted("");
-            }}
-            className="text-sm text-slate-400 hover:text-slate-600"
-          >
-            ← Start over
-          </button>
-        )}
       </header>
 
       {!session && (
-        <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h2 className="text-lg font-medium text-slate-800">
+        <section className="rounded-2xl border border-line bg-card p-8">
+          <h2 className="text-lg font-semibold text-hi">
             Paste data or upload a spreadsheet
           </h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-mut">
             Everything runs in your browser — your data never leaves this device.
           </p>
           <textarea
             value={pasted}
             onChange={(e) => setPasted(e.target.value)}
             placeholder={"Paste from Excel or Google Sheets (Ctrl+V)…\n\nName\tEmail\tJoined\nJohn Smith\tjohn@acme.com\t15/01/2024"}
-            className="mt-4 h-48 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-4 font-mono text-sm outline-none placeholder:text-slate-300 focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+            className="mt-5 h-48 w-full resize-y rounded-xl border border-line bg-inset p-4 font-mono text-[13px] text-body outline-none placeholder:text-dim focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
           />
-          <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
               onClick={() => analyse(pasted)}
               disabled={!pasted.trim() || busy}
-              className="rounded-lg bg-teal-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-teal-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-lg bg-gradient-to-r from-teal to-cyan px-5 py-2.5 text-sm font-semibold text-ink shadow-[0_0_18px_rgba(45,212,191,0.35)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none"
             >
               {busy ? "Analysing…" : "Analyse data"}
             </button>
             <button
               onClick={() => fileInput.current?.click()}
               disabled={busy}
-              className="rounded-lg border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-40"
+              className="rounded-lg border border-line2 bg-card2 px-5 py-2.5 text-sm font-medium text-body transition hover:border-mut disabled:opacity-40"
             >
               Upload CSV / Excel
             </button>
@@ -176,13 +194,13 @@ export default function Home() {
             />
             <button
               onClick={() => analyse(SAMPLE_DATA)}
-              className="text-sm font-medium text-teal-600 hover:text-teal-700"
+              className="font-mono text-xs font-semibold text-teal transition hover:text-cyan"
             >
-              Try sample data →
+              › try sample data
             </button>
           </div>
           {error && (
-            <p className="mt-4 rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            <p className="mt-4 rounded-lg border border-coral/25 bg-coral/10 px-4 py-3 text-sm text-coral">
               {error}
             </p>
           )}
@@ -190,7 +208,13 @@ export default function Home() {
       )}
 
       {session && (
-        <div className="space-y-6">
+        <div className="space-y-5">
+          <Pipeline
+            table={session.table}
+            result={session.result}
+            acceptedCount={acceptedCount}
+          />
+
           <ScoreCard
             score={session.result.score}
             projected={session.result.projectedScore}
@@ -212,42 +236,37 @@ export default function Home() {
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+            <div className="inline-flex rounded-xl border border-line bg-inset p-1">
               {(
                 [
                   ["original", "Original"],
-                  ["diff", "Changes"],
+                  ["diff", `Changes · ${acceptedCount}`],
                   ["cleaned", "Cleaned"],
                 ] as const
               ).map(([value, label]) => (
                 <button
                   key={value}
                   onClick={() => setMode(value)}
-                  className={`rounded-md px-4 py-1.5 text-sm font-medium transition ${
+                  className={`rounded-lg px-4 py-1.5 font-mono text-xs font-semibold transition ${
                     mode === value
-                      ? "bg-teal-600 text-white shadow-sm"
-                      : "text-slate-500 hover:text-slate-700"
+                      ? "bg-gradient-to-r from-teal to-cyan text-ink shadow-[0_0_14px_rgba(45,212,191,0.35)]"
+                      : "text-mut hover:text-body"
                   }`}
                 >
                   {label}
-                  {value === "diff" && acceptedCount > 0 && (
-                    <span className="ml-1.5 rounded-full bg-white/20 px-1.5 text-xs">
-                      {acceptedCount}
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2.5">
               <button
                 onClick={() => downloadCsv(cleaned, "refynr-cleaned.csv")}
-                className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-slate-700"
+                className="rounded-lg bg-gradient-to-r from-teal to-cyan px-5 py-2 text-sm font-semibold text-ink shadow-[0_0_18px_rgba(45,212,191,0.35)] transition hover:brightness-110"
               >
                 Download CSV
               </button>
               <button
                 onClick={() => void downloadXlsx(cleaned, "refynr-cleaned.xlsx")}
-                className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
               >
                 Download Excel
               </button>
@@ -259,12 +278,13 @@ export default function Home() {
             cleaned={cleaned}
             cellPatches={accepted.cellPatches}
             removedRows={accepted.removedRows}
+            advisoryCells={advisoryCells}
             mode={mode}
           />
 
-          <p className="pb-6 text-center text-xs text-slate-400">
-            Hover any changed cell to see why it changed. Your original data is
-            never modified — refynr only ever exports a copy.
+          <p className="pb-8 text-center font-mono text-[11px] leading-relaxed text-dim">
+            Hover any changed cell to see why. Your original data is never
+            modified — refynr only ever exports a copy.
           </p>
         </div>
       )}

@@ -205,6 +205,7 @@ export const dateFixer: Fixer = {
         detail: `${impossible.length} values in date columns could not be read as real dates (e.g. ${samples}). These may be typos (31/02/2024), placeholder text, or column drift. Refynr never guesses a date — review manually.`,
         count: impossible.length,
         column: impossible[0]!.col,
+        cells: impossible.map((c) => ({ row: c.row, col: c.col })),
         patchIds: [],
       });
     }

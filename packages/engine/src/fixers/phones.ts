@@ -104,6 +104,7 @@ export const phoneFixer: Fixer = {
         detail: `${n(invalid.length, "value has", "values have")} an impossible digit count or structure in phone columns, e.g. ${samples}. Review these manually.`,
         count: invalid.length,
         column: invalid[0]!.col,
+        cells: invalid.map((c) => ({ row: c.row, col: c.col })),
         patchIds: [],
       });
     }

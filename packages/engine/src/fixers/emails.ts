@@ -74,6 +74,7 @@ export const emailFixer: Fixer = {
         detail: `${n(invalidCells.length, "value", "values")} in email columns ${verb(invalidCells.length, "is not a valid address", "are not valid addresses")}, e.g. ${samples}. Refynr never guesses an email — review these manually or exclude them before import.`,
         count: invalidCells.length,
         column: invalidCells[0]!.col,
+        cells: invalidCells.map((c) => ({ row: c.row, col: c.col })),
         patchIds: [],
       });
     }
