@@ -12,7 +12,6 @@ import type {
   CleanseResponse,
 } from "@/workers/cleanse.worker";
 import { AiSummary } from "@/components/AiSummary";
-import { Pipeline } from "@/components/Pipeline";
 import { ScoreCard } from "@/components/ScoreCard";
 import { FindingsPanel } from "@/components/FindingsPanel";
 import { DataTable, type ViewMode } from "@/components/DataTable";
@@ -209,12 +208,6 @@ export default function Home() {
 
       {session && (
         <div className="space-y-5">
-          <Pipeline
-            table={session.table}
-            result={session.result}
-            acceptedCount={acceptedCount}
-          />
-
           <ScoreCard
             score={session.result.score}
             projected={session.result.projectedScore}
