@@ -60,7 +60,7 @@ export function AiSummary({
           <span className="glow-teal text-sm text-grape" aria-hidden>
             ✦
           </span>
-          <h2 className="label !text-grape">AI insights</h2>
+          <h2 className="label text-grape!">AI insights</h2>
         </div>
         {state.status === "done" && (
           <span className={`pill ${RISK_PILL[state.insights.riskLevel]}`}>
@@ -113,7 +113,7 @@ export function AiSummary({
               {state.insights.likelyOrigin}
             </p>
             <div className="pt-1">
-              <h3 className="label mb-3 !text-[10px]">Recommended next steps</h3>
+              <h3 className="label mb-3 text-[10px]!">Recommended next steps</h3>
               <ol className="space-y-2">
                 {state.insights.recommendations.map((r, i) => (
                   <li key={i} className="flex gap-3 text-sm leading-relaxed text-body">

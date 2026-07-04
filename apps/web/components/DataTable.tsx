@@ -50,7 +50,7 @@ function CellEditor({
           (e.target as HTMLInputElement).blur();
         }
       }}
-      className={`w-full min-w-[7rem] rounded border bg-inset px-1.5 py-0.5 font-mono text-[12px] text-body outline-none focus:ring-1 ${flagged ? "focus:ring-amber/30" : "focus:ring-grape/30"} ${border}`}
+      className={`w-full min-w-28 rounded border bg-inset px-1.5 py-0.5 font-mono text-[12px] text-body outline-none focus:ring-1 ${flagged ? "focus:ring-amber/30" : "focus:ring-grape/30"} ${border}`}
     />
   );
 }
