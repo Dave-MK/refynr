@@ -55,11 +55,33 @@ interface EngineOptions {
 
 ## Scoring
 
-Four dimensions (validity 35%, consistency 25%, completeness 25%,
-uniqueness 15%), each degraded in proportion to severity-weighted issues per
-cell with a per-dimension multiplier (`src/score.ts`). Deterministic by
-design: the same file always scores the same, and before/after scores are
-directly comparable.
+Four DAMA-DMBOK dimensions, each an honest pass rate (clean units ÷ total
+units) with a severity weighting and a sensitivity factor so a few bad cells
+in a wide sheet still register (`src/score.ts`):
+
+| Dimension | Weight | Basis | Scored from |
+|---|---|---|---|
+| Consistency | 30% | cells | whitespace, casing, encoding, format normalisation |
+| Completeness | 25% | cells | blank rows, missing values |
+| Validity | 25% | cells | invalid emails/phones/postcodes, impossible dates, outliers |
+| Uniqueness | 20% | rows | exact + near-duplicate rows |
+
+Two properties make the score honest and useful:
+
+- **Weighted toward what's fixable.** Consistency, completeness, and
+  uniqueness (75% between them) are the dimensions refynr can remediate, so a
+  messy sheet scores low *because of fixable problems* — and accepting the
+  fixes produces a large, real gain (the deliberately-filthy sample data goes
+  62 → 95). Validity failures are advisory (never auto-guessed), so they
+  inform the score without anchoring the ceiling out of reach.
+- **Stable basis → remediation only ever raises the score.** Both the current
+  and projected scores use the *original* table's denominator. Deriving it
+  from the cleaned table would shrink it as rows are removed, making the
+  surviving advisory issues penalise harder — cleaning the data would
+  paradoxically lower the score. `scoreTable(profile, findings, basis?)` takes
+  an explicit `basis`; `cleanse()` pins it to the original for both scores.
+
+Deterministic: the same file always scores the same.
 
 ## Adding a fixer
 

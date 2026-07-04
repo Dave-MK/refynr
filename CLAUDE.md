@@ -63,5 +63,9 @@ finding copy must be grammatical for count 1 (use `n()`/`verb()` helpers).
 
 - Findings/patch copy: UK English for domain terms (capitalised, postcode),
   concrete and specific, explains *why it matters* not just what changed.
-- Health score is deterministic (see `score.ts` weights/multipliers) — same
-  input always scores the same.
+- Health score is deterministic (see `score.ts`) — same input always scores
+  the same. Both current and projected scores share one `basis` (the original
+  table's denominator) so accepting fixes can only raise the score, never
+  lower it. Weights lean toward fixable dimensions (consistency/completeness/
+  uniqueness) so remediation yields a meaningful gain; don't reweight so
+  validity (advisory-dominated) anchors the composite.

@@ -28,40 +28,66 @@ const RULE_DIMENSION: Record<string, DimensionKey> = {
 };
 
 /**
- * `multiplier` controls how fast a dimension degrades as issues accumulate.
- * Validity errors are catastrophic (8× — ~12.5% bad cells zeroes it);
- * consistency issues are cosmetic-but-costly (3× — a sheet needs a third of
- * its cells inconsistent before hitting zero).
+ * Four DAMA-DMBOK data-quality dimensions. Each is scored as an honest
+ * pass rate — (clean units / total units) — with a `sensitivity` factor
+ * that amplifies the penalty (a handful of bad cells in a wide sheet should
+ * still visibly dent the score, the way Soda/Great Expectations surface a
+ * failing check rather than rounding it away).
+ *
+ * `basis` is the denominator scale: uniqueness is a *row*-level property
+ * (a duplicate is a whole bad row), the others are *cell*-level.
+ *
+ * Weights lean toward the dimensions refynr can actually remediate
+ * (consistency, completeness, uniqueness = 75% between them) so that a
+ * messy sheet scores low *because of fixable problems* — and accepting the
+ * fixes therefore produces a large, honest gain. Validity carries real but
+ * minority weight: its failures (invalid emails, impossible dates) are
+ * advisory and never auto-guessed, so they should inform the score without
+ * anchoring the ceiling out of remediation's reach.
  */
 const DIMENSION_META: Record<
   DimensionKey,
-  { label: string; weight: number; multiplier: number }
+  { label: string; weight: number; sensitivity: number; basis: "cells" | "rows" }
 > = {
-  validity: { label: "Validity", weight: 0.35, multiplier: 8 },
-  consistency: { label: "Consistency", weight: 0.25, multiplier: 3 },
-  completeness: { label: "Completeness", weight: 0.25, multiplier: 6 },
-  uniqueness: { label: "Uniqueness", weight: 0.15, multiplier: 8 },
+  validity: { label: "Validity", weight: 0.25, sensitivity: 3, basis: "cells" },
+  consistency: { label: "Consistency", weight: 0.3, sensitivity: 4, basis: "cells" },
+  completeness: { label: "Completeness", weight: 0.25, sensitivity: 4, basis: "cells" },
+  uniqueness: { label: "Uniqueness", weight: 0.2, sensitivity: 5, basis: "rows" },
 };
 
-const SEVERITY_WEIGHT = { error: 1, warning: 0.5, info: 0.15 } as const;
+const SEVERITY_WEIGHT = { error: 1, warning: 0.5, info: 0.2 } as const;
+
+/** Denominator scale for a score. Pass the ORIGINAL table's counts when
+ *  scoring a cleaned/patched table so the two scores share one basis and
+ *  remediation can only ever raise the score (never shrink the denominator). */
+export interface ScoreBasis {
+  cells: number;
+  rows: number;
+}
+
+export function basisOf(profile: TableProfile): ScoreBasis {
+  return {
+    cells: Math.max(1, profile.rowCount * profile.columnCount),
+    rows: Math.max(1, profile.rowCount),
+  };
+}
 
 /**
- * Deterministic 0–100 score. Each dimension loses points in proportion to
- * (severity-weighted issues / total cells), so a 10-cell sheet with 5 bad
- * emails scores far worse than a 100k-cell sheet with the same 5.
- * Deterministic on purpose: the same file always gets the same score,
- * and the score after accepting patches is directly comparable.
+ * Deterministic 0–100 health score. Same input always scores the same, and
+ * — crucially — a score computed on the patched table with the ORIGINAL
+ * basis is directly comparable to the score on the original table: every
+ * accepted fix moves a failing unit to passing, so the score can only rise.
  */
 export function scoreTable(
   profile: TableProfile,
   findings: Finding[],
+  basis: ScoreBasis = basisOf(profile),
 ): HealthScore {
-  const totalCells = Math.max(1, profile.rowCount * profile.columnCount);
-
   const dimensions: ScoreDimension[] = (
     Object.keys(DIMENSION_META) as DimensionKey[]
   ).map((key) => {
     const meta = DIMENSION_META[key];
+    const denom = meta.basis === "rows" ? basis.rows : basis.cells;
     let weighted = 0;
     let issues = 0;
     for (const f of findings) {
@@ -69,7 +95,7 @@ export function scoreTable(
       issues += f.count;
       weighted += f.count * SEVERITY_WEIGHT[f.severity];
     }
-    const penalty = Math.min(1, (weighted / totalCells) * meta.multiplier);
+    const penalty = Math.min(1, (weighted / denom) * meta.sensitivity);
     return {
       key,
       label: meta.label,

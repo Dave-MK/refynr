@@ -4,6 +4,7 @@ import {
   cleanse,
   fromDelimitedText,
   profileTable,
+  scoreTable,
   type CellPatch,
   type Table,
 } from "../src/index.js";
@@ -106,6 +107,13 @@ describe("cleanse", () => {
     expect(result.score.overall).toBeLessThan(result.projectedScore.overall);
     expect(result.score.overall).toBeGreaterThanOrEqual(0);
     expect(result.projectedScore.overall).toBeLessThanOrEqual(100);
+  });
+
+  it("scores uniqueness against rows, not cells (a duplicate is a bad row)", () => {
+    // messy has 1 exact-duplicate row out of 6 → uniqueness should be well
+    // below a cell-basis reading, which would barely register.
+    const uniq = result.score.dimensions.find((d) => d.key === "uniqueness")!;
+    expect(uniq.score).toBeLessThan(85);
   });
 
   it("every patch has a human-readable reason", () => {
@@ -226,6 +234,73 @@ describe("encoding repair", () => {
       (p) => p.kind === "cell" && p.cell.row === 2,
     );
     expect(row2.length).toBe(0);
+  });
+});
+
+describe("health scoring", () => {
+  // A sheet that is messy in fixable ways (dupes, casing, whitespace, formats)
+  // plus a couple of unfixable advisories (invalid email, impossible date).
+  const table = fromDelimitedText(
+    [
+      "Name,Email,Joined,Company",
+      "  john smith ,john@acme.com,15/01/2024,ACME LTD",
+      "John Smith,john@acme.com,2024-01-15,Acme Ltd",
+      "John Smith,john@acme.com,2024-01-15,Acme Ltd",
+      "jane doe,not-an-email,31/02/2024,acme ltd",
+      "Bob Jones,bob@x.io,03/04/2024,Bob & Co",
+      "Ann Lee,ann@lee.co.uk,2024-05-20,Lee Co",
+    ].join("\n"),
+  );
+  const result = cleanse(table);
+
+  it("produces a large, meaningful gain when fixes are accepted", () => {
+    const gain = result.projectedScore.overall - result.score.overall;
+    expect(gain).toBeGreaterThanOrEqual(15);
+  });
+
+  it("never lets remediation lower the score (stable basis)", () => {
+    // The old bug: accepting fixes removed rows, shrank the denominator, and
+    // the surviving advisory issues penalised harder — cleaning lowered the
+    // score. Projected must always be >= now.
+    expect(result.projectedScore.overall).toBeGreaterThanOrEqual(
+      result.score.overall,
+    );
+    for (const key of ["validity", "consistency", "completeness", "uniqueness"] as const) {
+      const now = result.score.dimensions.find((d) => d.key === key)!.score;
+      const proj = result.projectedScore.dimensions.find((d) => d.key === key)!.score;
+      expect(proj).toBeGreaterThanOrEqual(now);
+    }
+  });
+
+  it("scoreTable is stable under a shrinking table when the basis is held", () => {
+    // Same findings, but scored against a smaller table with the original
+    // basis pinned, must not drop below the original-table score.
+    const bigProfile = profileTable(table);
+    const smallProfile = profileTable({
+      headers: table.headers,
+      rows: table.rows.slice(0, 3),
+    });
+    const findings = result.findings;
+    const withOwnBasis = scoreTable(smallProfile, findings);
+    const withPinnedBasis = scoreTable(smallProfile, findings, {
+      cells: bigProfile.rowCount * bigProfile.columnCount,
+      rows: bigProfile.rowCount,
+    });
+    expect(withPinnedBasis.overall).toBeGreaterThanOrEqual(withOwnBasis.overall);
+  });
+
+  it("weights fixable dimensions above validity so mess is recoverable", () => {
+    // Validity failures are advisory (never auto-fixed); they must not
+    // dominate the composite, or accepting every fix would barely move it.
+    const clean = cleanse({
+      headers: ["A", "B"],
+      rows: [
+        ["1", "x"],
+        ["2", "y"],
+        ["3", "z"],
+      ],
+    });
+    expect(clean.score.overall).toBeGreaterThanOrEqual(95);
   });
 });
 

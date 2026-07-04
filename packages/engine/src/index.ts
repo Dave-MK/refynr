@@ -1,6 +1,6 @@
 import type { CleanseResult, EngineOptions, Table } from "./types.js";
 import { profileTable } from "./profile.js";
-import { scoreTable } from "./score.js";
+import { basisOf, scoreTable } from "./score.js";
 import { applyPatches } from "./table.js";
 import type { Fixer } from "./fixers/fixer.js";
 import { whitespaceFixer } from "./fixers/whitespace.js";
@@ -63,15 +63,23 @@ export function cleanse(
     patches.push(...out.patches);
   }
 
-  const score = scoreTable(profile, findings);
+  // The denominator is fixed to the ORIGINAL table for both scores. Accepting
+  // fixes removes rows (duplicates, blanks), so re-deriving the basis from the
+  // cleaned table would shrink the denominator and make the few unfixable
+  // advisory issues penalise *harder* — cleaning the data would lower the
+  // score. Sharing one basis guarantees remediation can only raise it.
+  const basis = basisOf(profile);
+  const score = scoreTable(profile, findings, basis);
 
-  // Projected score: re-run analysis on the fully-patched table.
+  // Projected score: re-run analysis on the fully-patched table (captures
+  // second-order effects, e.g. a casing fix collapsing a near-duplicate),
+  // but score it against the original basis.
   const cleanedTable = applyPatches(table, patches);
   const cleanedProfile = profileTable(cleanedTable);
   const remainingFindings = FIXERS.filter((f) => !disabled.has(f.rule)).flatMap(
     (f) => f.run({ table: cleanedTable, profile: cleanedProfile, options: opts }).findings,
   );
-  const projectedScore = scoreTable(cleanedProfile, remainingFindings);
+  const projectedScore = scoreTable(cleanedProfile, remainingFindings, basis);
 
   return { profile, findings, patches, score, projectedScore };
 }
