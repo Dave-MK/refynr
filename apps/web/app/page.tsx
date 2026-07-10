@@ -15,6 +15,7 @@ import type {
   CleanseResponse,
 } from "@/workers/cleanse.worker";
 import { AiSummary } from "@/components/AiSummary";
+import { AuthNav } from "@/components/AuthNav";
 import { ScoreCard } from "@/components/ScoreCard";
 import { FindingsPanel } from "@/components/FindingsPanel";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
@@ -214,6 +215,7 @@ export default function Home() {
               start over
             </button>
           )}
+          <AuthNav />
         </div>
       </header>
 

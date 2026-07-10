@@ -31,7 +31,31 @@ interface CleanRequest {
 
 const MAX_CELLS = 500_000;
 
+/**
+ * Bearer-token gate for the developer API. The web UI does NOT use this route
+ * (it runs the engine in the browser), so it's off unless REFYNR_API_KEY is
+ * set. When set, callers must send `Authorization: Bearer <REFYNR_API_KEY>`.
+ */
+function authorize(request: Request): NextResponse | null {
+  const expected = process.env.REFYNR_API_KEY;
+  if (!expected) {
+    return NextResponse.json(
+      { error: "This API is not enabled." },
+      { status: 404 },
+    );
+  }
+  const header = request.headers.get("authorization") ?? "";
+  const token = header.replace(/^Bearer\s+/i, "");
+  if (token !== expected) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  return null;
+}
+
 export async function POST(request: Request) {
+  const denied = authorize(request);
+  if (denied) return denied;
+
   let body: CleanRequest;
   try {
     body = (await request.json()) as CleanRequest;

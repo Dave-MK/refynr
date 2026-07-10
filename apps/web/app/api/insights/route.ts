@@ -1,6 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextResponse } from "next/server";
 import type { HealthScore, TableProfile } from "@refynr/engine";
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { supabaseConfigured } from "@/lib/supabase/config";
+import { GLOBAL_DAILY_CAP, quotaFor } from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -95,6 +99,90 @@ ${findings}
 Interpret this for the user. Be specific to what you see — reference actual column names and finding counts. Do not restate the findings list; add insight the rules engine cannot: what the data probably is, where it likely came from, what the issues imply about upstream processes, and what to do beyond the automatic fixes.`;
 }
 
+/**
+ * Auth + quota gate. Returns the user id (to reserve/refund against) or an
+ * error response to send straight back. When Supabase isn't configured (local
+ * dev without accounts) the gate is skipped so the tool still works offline.
+ */
+type Gate =
+  | { ok: true; userId: string | null }
+  | { ok: false; response: NextResponse };
+
+async function enforceEntitlement(plan: string): Promise<Gate> {
+  if (!supabaseConfigured) return { ok: true, userId: null };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "Sign in to generate AI insights." },
+        { status: 401 },
+      ),
+    };
+  }
+
+  // Trust the user's own plan row (RLS-guarded); default to free.
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("plan")
+    .eq("id", user.id)
+    .single();
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("consume_insight", {
+    p_user_id: user.id,
+    p_quota: quotaFor(profile?.plan ?? plan),
+    p_global_cap: GLOBAL_DAILY_CAP,
+  });
+
+  if (error) {
+    console.error("[insights] consume_insight failed:", error);
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "Couldn't check your usage. Try again shortly." },
+        { status: 503 },
+      ),
+    };
+  }
+
+  const result = data as { allowed: boolean; reason?: string };
+  if (!result.allowed) {
+    if (result.reason === "global_cap") {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "AI insights are busy right now — please try again later." },
+          { status: 503 },
+        ),
+      };
+    }
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "You've used all your AI insights for today. They reset tomorrow." },
+        { status: 402 },
+      ),
+    };
+  }
+
+  return { ok: true, userId: user.id };
+}
+
+/** Give back a reserved call when the AI request itself fails. */
+async function refund(userId: string | null) {
+  if (!userId) return;
+  try {
+    await createAdminClient().rpc("refund_insight", { p_user_id: userId });
+  } catch (e) {
+    console.error("[insights] refund failed:", e);
+  }
+}
+
 export async function POST(request: Request) {
   let body: InsightRequest;
   try {
@@ -106,10 +194,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  const gate = await enforceEntitlement("free");
+  if (!gate.ok) return gate.response;
+
   let client: Anthropic;
   try {
     client = new Anthropic();
   } catch {
+    await refund(gate.userId);
     return NextResponse.json({ error: MISSING_KEY_MESSAGE }, { status: 503 });
   }
 
@@ -128,6 +220,7 @@ export async function POST(request: Request) {
 
     const text = response.content.find((b) => b.type === "text");
     if (!text || text.type !== "text") {
+      await refund(gate.userId);
       return NextResponse.json(
         { error: "The AI returned no usable output. Try again." },
         { status: 502 },
@@ -137,6 +230,7 @@ export async function POST(request: Request) {
     const insights = JSON.parse(text.text) as InsightResponse;
     return NextResponse.json(insights);
   } catch (error) {
+    await refund(gate.userId);
     if (error instanceof Anthropic.AuthenticationError) {
       return NextResponse.json({ error: MISSING_KEY_MESSAGE }, { status: 503 });
     }

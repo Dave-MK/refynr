@@ -1,8 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import type { CleanseResult, TableProfile } from "@refynr/engine";
 import type { InsightResponse } from "@/app/api/insights/route";
+import type { UsageResponse } from "@/app/api/usage/route";
+import { supabaseConfigured } from "@/lib/supabase/config";
+import { useUser } from "@/lib/supabase/useUser";
 
 const RISK_PILL: Record<InsightResponse["riskLevel"], string> = {
   low: "border-teal/30 bg-teal/10 text-teal",
@@ -17,12 +21,28 @@ export function AiSummary({
   profile: TableProfile;
   result: CleanseResult;
 }) {
+  const { user, loading: authLoading } = useUser();
+  const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [state, setState] = useState<
     | { status: "idle" }
     | { status: "loading" }
     | { status: "done"; insights: InsightResponse }
-    | { status: "error"; message: string }
+    | { status: "error"; message: string; needsAuth?: boolean }
   >({ status: "idle" });
+
+  const refreshUsage = useCallback(async () => {
+    if (!supabaseConfigured) return;
+    try {
+      const res = await fetch("/api/usage");
+      setUsage((await res.json()) as UsageResponse);
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) void refreshUsage();
+  }, [user, refreshUsage]);
 
   const generate = async () => {
     setState({ status: "loading" });
@@ -44,14 +64,22 @@ export function AiSummary({
       });
       const data = (await res.json()) as InsightResponse & { error?: string };
       if (!res.ok) {
-        setState({ status: "error", message: data.error ?? "Something went wrong." });
+        setState({
+          status: "error",
+          message: data.error ?? "Something went wrong.",
+          needsAuth: res.status === 401,
+        });
         return;
       }
       setState({ status: "done", insights: data });
+      void refreshUsage();
     } catch {
       setState({ status: "error", message: "Couldn't reach the server." });
     }
   };
+
+  // Signed-out gate (only when accounts are configured).
+  const signedOut = supabaseConfigured && !authLoading && !user;
 
   return (
     <section className="rounded-2xl border border-ailine bg-aicard p-6">
@@ -67,10 +95,31 @@ export function AiSummary({
             {state.insights.riskLevel} risk
           </span>
         )}
+        {state.status !== "done" && usage?.authed && usage.remaining !== undefined && (
+          <span className="font-mono text-[11px] text-dim">
+            {usage.remaining} insight{usage.remaining === 1 ? "" : "s"} left today
+          </span>
+        )}
       </div>
 
       <div className="mt-4">
-        {state.status === "idle" && (
+        {signedOut && (
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <p className="max-w-xl text-sm leading-relaxed text-mut">
+              Create a free account to get an executive summary and
+              recommendations from Claude. Only column statistics and a handful
+              of sample values are sent — never your full dataset.
+            </p>
+            <Link
+              href="/login"
+              className="shrink-0 rounded-lg border border-grape/40 bg-grape/15 px-4 py-2 font-mono text-xs font-semibold tracking-wide text-grape transition hover:bg-grape/25"
+            >
+              Sign in to generate
+            </Link>
+          </div>
+        )}
+
+        {!signedOut && state.status === "idle" && (
           <div className="flex flex-wrap items-center justify-between gap-4">
             <p className="max-w-xl text-sm leading-relaxed text-mut">
               Get an executive summary and recommendations from Claude. Only
@@ -95,12 +144,21 @@ export function AiSummary({
         {state.status === "error" && (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-coral">{state.message}</p>
-            <button
-              onClick={() => void generate()}
-              className="shrink-0 rounded-lg border border-line2 px-4 py-2 font-mono text-xs text-mut transition hover:text-body"
-            >
-              Try again
-            </button>
+            {state.needsAuth ? (
+              <Link
+                href="/login"
+                className="shrink-0 rounded-lg border border-line2 px-4 py-2 font-mono text-xs text-mut transition hover:text-body"
+              >
+                Sign in
+              </Link>
+            ) : (
+              <button
+                onClick={() => void generate()}
+                className="shrink-0 rounded-lg border border-line2 px-4 py-2 font-mono text-xs text-mut transition hover:text-body"
+              >
+                Try again
+              </button>
+            )}
           </div>
         )}
 

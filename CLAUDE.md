@@ -53,9 +53,17 @@ finding copy must be grammatical for count 1 (use `n()`/`verb()` helpers).
   after engine changes, or run its `dev` watcher.
 - The extension's `tsconfig.json` extends generated `.wxt/tsconfig.json`
   (created by `wxt prepare` on install) and adds `jsx: react-jsx`.
-- API routes (`/api/clean`, `/api/insights`) are **unauthenticated** — add
-  rate limiting/auth before any public deployment (insights spends Anthropic
-  credits per call).
+- **Auth + insight metering** (Supabase). `/api/insights` requires a signed-in
+  user and enforces a per-user daily quota + a global daily cap (the wallet
+  kill-switch) via the atomic `consume_insight` Postgres function; failed AI
+  calls `refund_insight`. Quotas live in `apps/web/lib/plans.ts` (code, not the
+  DB) so paywalling later is a config change. `/api/clean` is a bearer-token
+  dev API (`REFYNR_API_KEY`), disabled (404) when the key is unset. Schema is
+  `apps/web/supabase/migrations/0001_auth_metering.sql`. **Without the Supabase
+  env vars the gate is skipped** so local dev works offline — production must
+  set them (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY`). Only AI insights are gated; in-browser
+  cleansing needs no account (it's the activation funnel).
 - AI insights need `ANTHROPIC_API_KEY` in `apps/web/.env.local`
   (see `.env.example`); everything else works without it.
 
