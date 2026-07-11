@@ -7,7 +7,9 @@ import {
   type CellPatch,
   type CellValue,
   type CleanseResult,
+  type EngineOptions,
   type Finding,
+  type Recipe,
   type Table,
 } from "@refynr/engine";
 import type {
@@ -17,6 +19,7 @@ import type {
 import { AuthNav } from "@/components/AuthNav";
 import { Landing } from "@/components/Landing";
 import { AnalysisPanel } from "@/components/AnalysisPanel";
+import { RecipeBar } from "@/components/RecipeBar";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
 import { downloadCsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
@@ -42,6 +45,10 @@ export default function Home() {
   const [manualEdits, setManualEdits] = useState<Map<string, CellValue>>(new Map());
   // Findings the user has un-ticked, keyed stably so choices survive re-cleanse.
   const [disabled, setDisabled] = useState<Set<string>>(new Set());
+  // Engine options (date handling, disabled fixers) — driven by recipes / NL commands.
+  const [options, setOptions] = useState<EngineOptions>({});
+  // Fixer rules whose fixes a recipe leaves un-accepted (findings still shown).
+  const [skipRules, setSkipRules] = useState<Set<string>>(new Set());
   const [mode, setMode] = useState<ViewMode>("diff");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,6 +68,8 @@ export default function Home() {
       setBase({ table: e.data.table, result: e.data.result });
       setManualEdits(new Map());
       setDisabled(new Set());
+      setOptions({});
+      setSkipRules(new Set());
       setMode("diff");
       setError(null);
     };
@@ -97,22 +106,38 @@ export default function Home() {
     [base, manualEdits],
   );
 
-  // Re-cleanse on the main thread once the user has made manual edits, so the
-  // score, findings and cleaned output all update live. The initial (unedited)
-  // result comes from the worker so large files never block the first paint.
+  // Whether non-default engine options are in play (from a recipe or command).
+  const hasOptions = !!(
+    options.dateOrder ||
+    options.dateOutput ||
+    options.disabledRules?.length
+  );
+
+  // Re-cleanse on the main thread once the user has made manual edits or set
+  // engine options, so the score, findings and cleaned output all update live.
+  // The initial (unedited, default-options) result comes from the worker so
+  // large files never block the first paint.
   const result = useMemo(() => {
     if (!base) return null;
-    return manualEdits.size === 0 ? base.result : cleanse(working!);
-  }, [base, manualEdits, working]);
+    return manualEdits.size === 0 && !hasOptions
+      ? base.result
+      : cleanse(working!, options);
+  }, [base, manualEdits, working, options, hasOptions]);
 
-  // Which finding indices are currently accepted (fixable and not un-ticked).
+  // Which finding indices are currently accepted (fixable, not un-ticked, and
+  // not left un-accepted by a recipe's skip list).
   const enabledIndices = useMemo(() => {
     const set = new Set<number>();
     result?.findings.forEach((f, i) => {
-      if (f.patchIds.length > 0 && !disabled.has(findingKey(f))) set.add(i);
+      if (
+        f.patchIds.length > 0 &&
+        !disabled.has(findingKey(f)) &&
+        !skipRules.has(f.rule)
+      )
+        set.add(i);
     });
     return set;
-  }, [result, disabled]);
+  }, [result, disabled, skipRules]);
 
   const accepted = useMemo(() => {
     const ids = new Set<string>();
@@ -189,6 +214,30 @@ export default function Home() {
     },
     [result],
   );
+
+  // Apply engine options only (from the plain-English command box).
+  const onApplyOptions = useCallback((next: EngineOptions) => {
+    setOptions(next);
+  }, []);
+
+  // Apply a full recipe: its options plus which fixes to leave un-accepted.
+  const onApplyRecipe = useCallback((recipe: Recipe) => {
+    setOptions(recipe.options);
+    setSkipRules(new Set(recipe.skipRules));
+    setDisabled(new Set()); // recipe defines the accept/skip state
+  }, []);
+
+  // The rules currently left un-accepted — a recipe's skips plus any finding
+  // the user has since un-ticked by hand — so "Save current" captures both.
+  const currentSkipRules = useMemo(() => {
+    const rules = new Set(skipRules);
+    if (result) {
+      result.findings.forEach((f) => {
+        if (f.patchIds.length > 0 && disabled.has(findingKey(f))) rules.add(f.rule);
+      });
+    }
+    return [...rules];
+  }, [skipRules, disabled, result]);
 
   const acceptedCount = accepted.cellPatches.size + accepted.removedRows.size + accepted.headerPatches.size;
   const manualCount = manualEdits.size;
@@ -277,6 +326,13 @@ export default function Home() {
 
       {base && working && result && (
         <div className="space-y-5">
+          <RecipeBar
+            currentOptions={options}
+            currentSkipRules={currentSkipRules}
+            onApplyOptions={onApplyOptions}
+            onApplyRecipe={onApplyRecipe}
+          />
+
           <AnalysisPanel
             score={result.score}
             projected={result.projectedScore}

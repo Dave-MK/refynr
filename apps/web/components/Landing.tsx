@@ -128,6 +128,40 @@ export function Landing({ children }: { children: ReactNode }) {
         </div>
       </section>
 
+      {/* The difference vs in-cell AI */}
+      <section>
+        <div className="mb-6 text-center">
+          <h2 className="label text-teal!">Why not just use AI in Excel?</h2>
+          <p className="mt-2 text-lg font-semibold text-hi">
+            The cell assistants rewrite your data. refynr shows its working.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-line bg-card2 p-5">
+            <h3 className="font-mono text-[11px] uppercase tracking-wider text-mut">
+              In-cell AI (Copilot, GPT-in-Sheets)
+            </h3>
+            <ul className="mt-3 space-y-2 text-[13px] text-mut">
+              <li>✗ Sends your rows to a cloud model</li>
+              <li>✗ Edits cells in place — the original is gone</li>
+              <li>✗ You trust the change; you can't inspect the rule</li>
+              <li>✗ Every run can differ</li>
+            </ul>
+          </div>
+          <div className="rounded-xl border border-teal/30 bg-card p-5">
+            <h3 className="font-mono text-[11px] uppercase tracking-wider text-teal">
+              refynr
+            </h3>
+            <ul className="mt-3 space-y-2 text-[13px] text-body">
+              <li>✓ Runs locally — your rows never leave the tab</li>
+              <li>✓ Builds a clean copy; your original is untouched</li>
+              <li>✓ Every change is a patch with a reason you can read</li>
+              <li>✓ Deterministic — same input, same result, every time</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       {/* Privacy note */}
       <section className="rounded-2xl border border-teal/20 bg-card p-7 text-center">
         <h2 className="text-lg font-semibold text-hi">

@@ -2,9 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   applyPatches,
   cleanse,
+  createRecipe,
   fromDelimitedText,
+  parseInstruction,
+  parseRecipe,
   profileTable,
+  runRecipe,
   scoreTable,
+  serializeRecipe,
   type CellPatch,
   type Table,
 } from "../src/index.js";
@@ -451,5 +456,154 @@ describe("date order inference", () => {
     const result = cleanse(table);
     const patch = result.patches[0] as CellPatch;
     expect(patch.after).toBe("2024-04-03"); // 3rd of April
+  });
+});
+
+describe("near-duplicate clustering", () => {
+  it("collides token-reordered and punctuated variants of one record", () => {
+    const table: Table = {
+      headers: ["Name", "Company"],
+      rows: [
+        ["John Smith", "Acme Ltd"],
+        ["Smith, John", "Acme Ltd."], // same record, reordered + punctuation
+        ["Jane Doe", "Beta Co"],
+      ],
+    };
+    const finding = cleanse(table).findings.find((f) => f.rule === "near-duplicate-rows");
+    expect(finding).toBeDefined();
+    expect(finding!.count).toBeGreaterThanOrEqual(1);
+    expect(finding!.patchIds).toEqual([]); // advisory, never auto-removed
+  });
+
+  it("catches a single-character typo via nearest-neighbour", () => {
+    const table: Table = {
+      headers: ["Company"],
+      rows: [["Acme Trading Limited"], ["Acme Tradlng Limited"], ["Wholly Different Co"]],
+    };
+    const finding = cleanse(table).findings.find((f) => f.rule === "near-duplicate-rows");
+    expect(finding).toBeDefined();
+  });
+
+  it("does not flag genuinely distinct rows", () => {
+    const table: Table = {
+      headers: ["Name"],
+      rows: [["Alice"], ["Bob"], ["Carol"], ["Dave"]],
+    };
+    const finding = cleanse(table).findings.find((f) => f.rule === "near-duplicate-rows");
+    expect(finding).toBeUndefined();
+  });
+});
+
+describe("UK business identifiers", () => {
+  it("normalises a valid VAT number and flags an invalid one", () => {
+    const table: Table = {
+      headers: ["VAT Number"],
+      rows: [["gb 123 4567 82"], ["123456789"]], // first valid checksum, second not
+    };
+    const result = cleanse(table);
+    const fix = result.patches.find((p) => p.rule === "normalize-vat") as CellPatch;
+    expect(fix.after).toBe("GB123456782");
+    expect(result.findings.some((f) => f.rule === "invalid-vat" && f.count === 1)).toBe(true);
+  });
+
+  it("hyphenates a six-digit sort code and flags a short one", () => {
+    const table: Table = {
+      headers: ["Sort Code"],
+      rows: [["560036"], ["1234"]],
+    };
+    const result = cleanse(table);
+    const fix = result.patches.find((p) => p.rule === "normalize-sort-code") as CellPatch;
+    expect(fix.after).toBe("56-00-36");
+    expect(result.findings.some((f) => f.rule === "invalid-sort-code")).toBe(true);
+  });
+
+  it("zero-pads a company number stripped by Excel", () => {
+    const table: Table = {
+      headers: ["Company Number"],
+      rows: [["123456"], ["SC123456"], ["nope"]],
+    };
+    const result = cleanse(table);
+    const fix = result.patches.find(
+      (p) => p.rule === "normalize-company-number" && (p as CellPatch).cell.row === 0,
+    ) as CellPatch;
+    expect(fix.after).toBe("00123456");
+    expect(result.findings.some((f) => f.rule === "invalid-company-number")).toBe(true);
+  });
+
+  it("ignores identifier columns it wasn't asked about", () => {
+    const table: Table = { headers: ["Age"], rows: [["42"], ["37"]] };
+    const result = cleanse(table);
+    expect(result.patches.some((p) => p.rule.startsWith("normalize-vat"))).toBe(false);
+  });
+});
+
+describe("recipes", () => {
+  const table: Table = {
+    headers: ["Name", "Email"],
+    rows: [
+      ["  Ann ", "ANN@x.com"],
+      ["  Ann ", "ANN@x.com"], // exact dupe
+      ["bob", "bob@x.com"],
+    ],
+  };
+
+  it("round-trips through serialise/parse", () => {
+    const recipe = createRecipe("Monthly export", { dateOutput: "iso", disabledRules: ["consistent-casing"] }, ["remove-duplicate-rows"]);
+    const back = parseRecipe(serializeRecipe(recipe));
+    expect(back.name).toBe("Monthly export");
+    expect(back.options.disabledRules).toEqual(["consistent-casing"]);
+    expect(back.skipRules).toEqual(["remove-duplicate-rows"]);
+  });
+
+  it("replays accepted fixes deterministically", () => {
+    const recipe = createRecipe("all fixes");
+    const a = runRecipe(table, recipe);
+    const b = runRecipe(table, recipe);
+    expect(a.cleaned).toEqual(b.cleaned);
+    // whitespace trimmed and the exact dupe dropped -> 2 rows
+    expect(a.cleaned.rows.length).toBe(2);
+  });
+
+  it("honours skipRules by leaving that fix unapplied", () => {
+    const keepDupes = createRecipe("keep dupes", {}, ["remove-duplicate-rows"]);
+    const run = runRecipe(table, keepDupes);
+    expect(run.cleaned.rows.length).toBe(3); // dupe retained
+  });
+
+  it("rejects a non-recipe file", () => {
+    expect(() => parseRecipe("{\"hello\":1}")).toThrow();
+    expect(() => parseRecipe("not json")).toThrow();
+  });
+});
+
+describe("natural-language commands", () => {
+  it("understands a keep/skip instruction", () => {
+    const i = parseInstruction("Clean it up but keep duplicates and don't change the casing");
+    expect(i.options.disabledRules).toContain("remove-duplicate-rows");
+    expect(i.options.disabledRules).toContain("consistent-casing");
+    expect(i.matched.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("sets date output format", () => {
+    const i = parseInstruction("format dates as ISO");
+    expect(i.options.dateOutput).toBe("iso");
+  });
+
+  it("handles 'only' by disabling everything else", () => {
+    const i = parseInstruction("only fix whitespace");
+    expect(i.options.disabledRules).toContain("remove-duplicate-rows");
+    expect(i.options.disabledRules).not.toContain("trim-whitespace");
+  });
+
+  it("reports clauses it could not interpret", () => {
+    const i = parseInstruction("translate everything into French");
+    expect(i.unmatched.length).toBeGreaterThan(0);
+  });
+
+  it("a parsed instruction drives the engine as options", () => {
+    const table: Table = { headers: ["Name"], rows: [["a"], ["a"]] };
+    const i = parseInstruction("keep duplicates");
+    const result = cleanse(table, i.options);
+    expect(result.patches.some((p) => p.rule === "remove-duplicate-rows")).toBe(false);
   });
 });

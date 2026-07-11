@@ -16,11 +16,23 @@ import { integrityFixer } from "./fixers/integrity.js";
 import { numberFixer } from "./fixers/numbers.js";
 import { booleanFixer } from "./fixers/booleans.js";
 import { headerFixer } from "./fixers/headers.js";
+import { vatFixer, sortCodeFixer, companyNumberFixer } from "./fixers/uk.js";
 
 export * from "./types.js";
 export { profileTable } from "./profile.js";
 export { scoreTable } from "./score.js";
 export { applyPatches, fromDelimitedText, cellText, isEmptyCell } from "./table.js";
+export {
+  RECIPE_VERSION,
+  createRecipe,
+  serializeRecipe,
+  parseRecipe,
+  isRecipe,
+  runRecipe,
+  type Recipe,
+  type RecipeRun,
+} from "./recipe.js";
+export { parseInstruction, type Instruction } from "./nl.js";
 
 const DEFAULT_OPTIONS: Required<EngineOptions> = {
   dateOrder: "auto",
@@ -42,6 +54,9 @@ const FIXERS: Fixer[] = [
   emailFixer,
   phoneFixer,
   postcodeFixer,
+  vatFixer,
+  sortCodeFixer,
+  companyNumberFixer,
   integrityFixer,
 ];
 
