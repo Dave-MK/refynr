@@ -75,6 +75,55 @@ export function fromDelimitedText(text: string): Table {
   return { headers, rows: grid.slice(1).map(pad) };
 }
 
+/**
+ * Parse JSON into a Table. Accepts an array of row objects, or an object with
+ * a `data`/`rows`/`records` array. Headers are the union of keys in first-seen
+ * order; nested objects/arrays are stringified so the grid stays flat. This is
+ * the JSON half of "technical inputs" — the shape APIs and NoSQL exports arrive
+ * in — handled with zero dependencies.
+ */
+export function fromJson(text: string): Table {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("That isn't valid JSON.");
+  }
+  const arr = Array.isArray(parsed)
+    ? parsed
+    : (parsed as Record<string, unknown>)?.data ??
+      (parsed as Record<string, unknown>)?.rows ??
+      (parsed as Record<string, unknown>)?.records;
+  if (!Array.isArray(arr)) {
+    throw new Error("Expected a JSON array of records, or an object with a data/rows/records array.");
+  }
+
+  const headers: string[] = [];
+  const seen = new Set<string>();
+  for (const item of arr) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      for (const k of Object.keys(item as object)) {
+        if (!seen.has(k)) { seen.add(k); headers.push(k); }
+      }
+    }
+  }
+  if (headers.length === 0) throw new Error("No object records found in the JSON.");
+
+  const toCell = (v: unknown): CellValue => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "object") return JSON.stringify(v);
+    if (typeof v === "boolean" || typeof v === "number" || typeof v === "string") return v;
+    return String(v);
+  };
+
+  const rows: CellValue[][] = arr.map((item) => {
+    const obj = (item && typeof item === "object" && !Array.isArray(item) ? item : {}) as Record<string, unknown>;
+    return headers.map((h) => toCell(obj[h]));
+  });
+
+  return { headers, rows };
+}
+
 function parseDelimited(text: string, delimiter: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];

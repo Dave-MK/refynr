@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createRecipe,
   parseInstruction,
+  type Constraint,
   type EngineOptions,
   type Instruction,
   type Recipe,
@@ -25,11 +26,14 @@ import {
 export function RecipeBar({
   currentOptions,
   currentSkipRules,
+  columns,
   onApplyOptions,
   onApplyRecipe,
 }: {
   currentOptions: EngineOptions;
   currentSkipRules: string[];
+  /** Column names in the current data, for the expectations editor. */
+  columns: string[];
   /** Apply engine options only (used by the plain-English box). */
   onApplyOptions: (options: EngineOptions) => void;
   /** Apply a full recipe: options + which fixes to leave un-accepted. */
@@ -43,7 +47,43 @@ export function RecipeBar({
   const [importError, setImportError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
+  // Expectations editor state.
+  const [ruleCol, setRuleCol] = useState("");
+  const [ruleType, setRuleType] = useState<Constraint["type"]>("not-null");
+  const [ruleValue, setRuleValue] = useState("");
+  const constraints = currentOptions.constraints ?? [];
+
   useEffect(() => setRecipes(loadRecipes()), []);
+
+  const addConstraint = () => {
+    const column = ruleCol || columns[0];
+    if (!column) return;
+    const c: Constraint = { column, type: ruleType };
+    if (ruleType === "regex") c.pattern = ruleValue;
+    else if (ruleType === "allowed-values") c.values = ruleValue.split(",").map((s) => s.trim()).filter(Boolean);
+    else if (ruleType === "range") {
+      const [min, max] = ruleValue.split("-").map((s) => Number(s.trim()));
+      if (!Number.isNaN(min)) c.min = min;
+      if (!Number.isNaN(max)) c.max = max;
+    }
+    onApplyOptions({ ...currentOptions, constraints: [...constraints, c] });
+    setRuleValue("");
+  };
+
+  const removeConstraint = (i: number) => {
+    onApplyOptions({ ...currentOptions, constraints: constraints.filter((_, j) => j !== i) });
+  };
+
+  const needsValue = ruleType === "regex" || ruleType === "allowed-values" || ruleType === "range";
+  const describeConstraint = (c: Constraint): string => {
+    switch (c.type) {
+      case "not-null": return "not blank";
+      case "unique": return "unique";
+      case "regex": return `matches /${c.pattern ?? ""}/`;
+      case "range": return `${c.min ?? "−∞"}…${c.max ?? "∞"}`;
+      case "allowed-values": return `in [${(c.values ?? []).join(", ")}]`;
+    }
+  };
 
   const runInstruction = () => {
     if (!instruction.trim()) return;
@@ -213,6 +253,79 @@ export function RecipeBar({
                     ✕
                   </button>
                 </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="my-4 h-px bg-line" />
+
+      {/* Expectations */}
+      <div>
+        <label className="label text-teal!">Expectations (pass/fail rules)</label>
+        <p className="mt-1 font-mono text-[11px] text-dim">
+          Assert what "good" looks like. Violations are flagged, never auto-changed — and save into the recipe.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <select
+            value={ruleCol}
+            onChange={(e) => setRuleCol(e.target.value)}
+            className="rounded-lg border border-line bg-inset px-2.5 py-2 text-[13px] text-body outline-none focus:border-teal/60"
+          >
+            {columns.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <select
+            value={ruleType}
+            onChange={(e) => setRuleType(e.target.value as Constraint["type"])}
+            className="rounded-lg border border-line bg-inset px-2.5 py-2 text-[13px] text-body outline-none focus:border-teal/60"
+          >
+            <option value="not-null">must not be blank</option>
+            <option value="unique">must be unique</option>
+            <option value="regex">must match regex</option>
+            <option value="range">must be in range</option>
+            <option value="allowed-values">must be one of</option>
+          </select>
+          {needsValue && (
+            <input
+              value={ruleValue}
+              onChange={(e) => setRuleValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addConstraint()}
+              placeholder={
+                ruleType === "regex" ? "^[A-Z]{2}\\d+$"
+                : ruleType === "range" ? "0-120"
+                : "active, archived, pending"
+              }
+              className="min-w-[160px] flex-1 rounded-lg border border-line bg-inset px-3 py-2 text-[13px] text-body outline-none placeholder:text-dim focus:border-teal/60"
+            />
+          )}
+          <button
+            onClick={addConstraint}
+            disabled={columns.length === 0}
+            className="rounded-lg border border-line2 bg-card px-3 py-2 font-mono text-[11px] font-semibold text-body transition hover:border-mut disabled:opacity-40"
+          >
+            + Add rule
+          </button>
+        </div>
+
+        {constraints.length > 0 && (
+          <ul className="mt-2 flex flex-wrap gap-2">
+            {constraints.map((c, i) => (
+              <li
+                key={`${c.column}-${c.type}-${i}`}
+                className="inline-flex items-center gap-2 rounded-lg border border-line bg-card px-3 py-1.5 font-mono text-[11px] text-body"
+              >
+                <span className="text-hi">{c.column}</span>
+                <span className="text-mut">{describeConstraint(c)}</span>
+                <button
+                  onClick={() => removeConstraint(i)}
+                  title="Remove rule"
+                  className="text-mut transition hover:text-coral"
+                >
+                  ✕
+                </button>
               </li>
             ))}
           </ul>

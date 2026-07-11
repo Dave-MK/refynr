@@ -34,6 +34,11 @@ const RULE_DIMENSION: Record<string, DimensionKey> = {
   "missing-values": "completeness",
   "remove-duplicate-rows": "uniqueness",
   "near-duplicate-rows": "uniqueness",
+  "constraint-not-null": "completeness",
+  "constraint-unique": "uniqueness",
+  "constraint-regex": "validity",
+  "constraint-range": "validity",
+  "constraint-allowed-values": "validity",
 };
 
 /**

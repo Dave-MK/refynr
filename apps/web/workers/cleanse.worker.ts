@@ -1,6 +1,7 @@
 import {
   cleanse,
   fromDelimitedText,
+  fromJson,
   type CellValue,
   type CleanseResult,
   type Table,
@@ -9,6 +10,7 @@ import * as XLSX from "xlsx";
 
 export type CleanseRequest =
   | { kind: "text"; text: string }
+  | { kind: "json"; text: string }
   | { kind: "xlsx"; buffer: ArrayBuffer; name: string };
 
 export type CleanseResponse =
@@ -54,6 +56,8 @@ self.onmessage = (e: MessageEvent<CleanseRequest>) => {
 
     if (e.data.kind === "text") {
       table = fromDelimitedText(e.data.text);
+    } else if (e.data.kind === "json") {
+      table = fromJson(e.data.text);
     } else {
       const parsed = tableFromWorkbook(e.data.buffer);
       table = parsed.table;

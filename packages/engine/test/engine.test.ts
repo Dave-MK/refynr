@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPatches,
+  buildReport,
   cleanse,
   createRecipe,
+  diffTables,
   fromDelimitedText,
+  fromJson,
   parseInstruction,
   parseRecipe,
   profileTable,
+  reportToMarkdown,
   runRecipe,
   scoreTable,
   serializeRecipe,
   type CellPatch,
+  type Constraint,
   type Table,
 } from "../src/index.js";
 
@@ -605,5 +610,135 @@ describe("natural-language commands", () => {
     const i = parseInstruction("keep duplicates");
     const result = cleanse(table, i.options);
     expect(result.patches.some((p) => p.rule === "remove-duplicate-rows")).toBe(false);
+  });
+});
+
+describe("expectations (constraints)", () => {
+  const table: Table = {
+    headers: ["Email", "Status", "Age"],
+    rows: [
+      ["a@x.com", "active", "30"],
+      ["", "archived", "200"],
+      ["a@x.com", "banana", "25"],
+    ],
+  };
+
+  it("flags not-null, unique, allowed-values and range violations", () => {
+    const constraints: Constraint[] = [
+      { column: "Email", type: "not-null" },
+      { column: "Email", type: "unique" },
+      { column: "Status", type: "allowed-values", values: ["active", "archived"] },
+      { column: "Age", type: "range", min: 0, max: 120 },
+    ];
+    const result = cleanse(table, { constraints });
+    const rules = result.findings.map((f) => f.rule);
+    expect(rules).toContain("constraint-not-null"); // blank email row 2
+    expect(rules).toContain("constraint-unique"); // duplicate a@x.com
+    expect(rules).toContain("constraint-allowed-values"); // "banana"
+    expect(rules).toContain("constraint-range"); // 200 > 120
+    // Constraints are advisory — they never produce patches.
+    expect(result.findings.filter((f) => f.rule.startsWith("constraint")).every((f) => f.patchIds.length === 0)).toBe(true);
+  });
+
+  it("passes cleanly when the data satisfies the rule", () => {
+    const ok = cleanse(
+      { headers: ["Email"], rows: [["a@x.com"], ["b@x.com"]] },
+      { constraints: [{ column: "Email", type: "unique" }] },
+    );
+    expect(ok.findings.some((f) => f.rule.startsWith("constraint"))).toBe(false);
+  });
+
+  it("warns when a constraint names a missing column", () => {
+    const result = cleanse(table, { constraints: [{ column: "Nope", type: "not-null" }] });
+    expect(result.findings.some((f) => f.title.includes("missing column"))).toBe(true);
+  });
+});
+
+describe("dataset diff", () => {
+  const before: Table = {
+    headers: ["id", "name", "spend"],
+    rows: [
+      ["1", "Ann", "100"],
+      ["2", "Bob", "200"],
+      ["3", "Cara", "300"],
+    ],
+  };
+  const after: Table = {
+    headers: ["id", "name", "spend"],
+    rows: [
+      ["1", "Ann", "150"], // spend changed
+      ["3", "Cara", "300"], // unchanged
+      ["4", "Dan", "400"], // added
+      // id 2 removed
+    ],
+  };
+
+  it("classifies added, removed, changed and unchanged rows on an inferred key", () => {
+    const d = diffTables(before, after);
+    expect(d.keyColumn).toBe("id");
+    expect(d.added.map((r) => r.key)).toEqual(["4"]);
+    expect(d.removed.map((r) => r.key)).toEqual(["2"]);
+    expect(d.changed).toHaveLength(1);
+    expect(d.changed[0]!.cells[0]!.column).toBe("spend");
+    expect(d.changed[0]!.cells[0]!.after).toBe("150");
+    expect(d.unchanged).toBe(1);
+  });
+
+  it("reports added and removed columns", () => {
+    const d = diffTables(
+      { headers: ["id", "old"], rows: [["1", "x"]] },
+      { headers: ["id", "new"], rows: [["1", "y"]] },
+    );
+    expect(d.addedColumns).toEqual(["new"]);
+    expect(d.removedColumns).toEqual(["old"]);
+  });
+
+  it("falls back to positional diff without a usable key", () => {
+    // Repeated values mean no column is a usable key -> positional comparison.
+    const d = diffTables(
+      { headers: ["v"], rows: [["a"], ["a"]] },
+      { headers: ["v"], rows: [["a"], ["c"]] },
+    );
+    expect(d.keyColumn).toBeNull();
+    expect(d.changed).toHaveLength(1);
+    expect(d.unchanged).toBe(1);
+  });
+});
+
+describe("run report", () => {
+  it("summarises accepted patches and advisories", () => {
+    const messyForReport: Table = {
+      headers: ["Name", "Email"],
+      rows: [["  Ann ", "a@x.com"], ["  Ann ", "a@x.com"], ["bob", "not-an-email"]],
+    };
+    const result = cleanse(messyForReport);
+    const acceptedIds = new Set(result.patches.map((p) => p.id));
+    const report = buildReport(result, acceptedIds);
+    expect(report.rowsRemoved).toBeGreaterThanOrEqual(1); // the exact dupe
+    expect(report.patchesApplied).toBe(result.patches.length);
+    expect(report.applied.length).toBeGreaterThan(0);
+    const md = reportToMarkdown(report, { timestamp: "2026-07-11" });
+    expect(md).toContain("# refynr cleaning report");
+    expect(md).toContain("Health score:");
+  });
+});
+
+describe("JSON input", () => {
+  it("parses an array of records with a union of keys", () => {
+    const t = fromJson('[{"a":1,"b":"x"},{"a":2,"c":true}]');
+    expect(t.headers).toEqual(["a", "b", "c"]);
+    expect(t.rows[0]).toEqual([1, "x", null]);
+    expect(t.rows[1]).toEqual([2, null, true]);
+  });
+
+  it("accepts a wrapped {data:[...]} object and stringifies nested values", () => {
+    const t = fromJson('{"data":[{"tags":["x","y"]}]}');
+    expect(t.headers).toEqual(["tags"]);
+    expect(t.rows[0]![0]).toBe('["x","y"]');
+  });
+
+  it("throws a clear error on non-record JSON", () => {
+    expect(() => fromJson("42")).toThrow();
+    expect(() => fromJson("not json")).toThrow();
   });
 });

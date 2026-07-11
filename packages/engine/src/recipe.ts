@@ -48,6 +48,7 @@ export function createRecipe(
       ...(options.dateOrder ? { dateOrder: options.dateOrder } : {}),
       ...(options.dateOutput ? { dateOutput: options.dateOutput } : {}),
       disabledRules: [...(options.disabledRules ?? [])],
+      ...(options.constraints?.length ? { constraints: options.constraints } : {}),
     },
     skipRules: [...skipRules],
   };

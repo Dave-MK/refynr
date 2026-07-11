@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyPatches,
+  buildReport,
   cleanse,
+  reportToMarkdown,
   type CellPatch,
   type CellValue,
   type CleanseResult,
@@ -93,6 +95,8 @@ export default function Home() {
       if (/\.(xlsx|xls)$/i.test(file.name)) {
         const buffer = await file.arrayBuffer();
         submit({ kind: "xlsx", buffer, name: file.name }, [buffer]);
+      } else if (/\.json$/i.test(file.name)) {
+        submit({ kind: "json", text: await file.text() });
       } else {
         analyse(await file.text());
       }
@@ -106,11 +110,13 @@ export default function Home() {
     [base, manualEdits],
   );
 
-  // Whether non-default engine options are in play (from a recipe or command).
+  // Whether non-default engine options are in play (from a recipe, command, or
+  // an expectation rule) — any of these means we must re-cleanse on the main thread.
   const hasOptions = !!(
     options.dateOrder ||
     options.dateOutput ||
-    options.disabledRules?.length
+    options.disabledRules?.length ||
+    options.constraints?.length
   );
 
   // Re-cleanse on the main thread once the user has made manual edits or set
@@ -215,9 +221,10 @@ export default function Home() {
     [result],
   );
 
-  // Apply engine options only (from the plain-English command box).
+  // Apply engine options. Constraints are preserved across a plain-English
+  // command (which doesn't set them) so typed rules aren't wiped by a command.
   const onApplyOptions = useCallback((next: EngineOptions) => {
-    setOptions(next);
+    setOptions((prev) => ({ ...next, constraints: next.constraints ?? prev.constraints }));
   }, []);
 
   // Apply a full recipe: its options plus which fixes to leave un-accepted.
@@ -241,6 +248,24 @@ export default function Home() {
 
   const acceptedCount = accepted.cellPatches.size + accepted.removedRows.size + accepted.headerPatches.size;
   const manualCount = manualEdits.size;
+
+  // Download a Markdown audit report of exactly what was changed and what's
+  // left for review — the shareable "show me what you did" artefact.
+  const downloadReport = useCallback(() => {
+    if (!result) return;
+    const report = buildReport(result, accepted.ids);
+    const md = reportToMarkdown(report, {
+      title: "refynr cleaning report",
+      timestamp: new Date().toLocaleString("en-GB"),
+    });
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "refynr-report.md";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [result, accepted]);
 
   return (
     <main className="mx-auto max-w-[960px] px-5 py-8">
@@ -295,12 +320,12 @@ export default function Home() {
               disabled={busy}
               className="rounded-lg border border-line2 bg-card2 px-5 py-2.5 text-sm font-medium text-body transition hover:border-mut disabled:opacity-40"
             >
-              Upload CSV / Excel
+              Upload CSV / Excel / JSON
             </button>
             <input
               ref={fileInput}
               type="file"
-              accept=".csv,.tsv,.txt,.xlsx,.xls"
+              accept=".csv,.tsv,.txt,.xlsx,.xls,.json"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -329,6 +354,7 @@ export default function Home() {
           <RecipeBar
             currentOptions={options}
             currentSkipRules={currentSkipRules}
+            columns={base.table.headers}
             onApplyOptions={onApplyOptions}
             onApplyRecipe={onApplyRecipe}
           />
@@ -377,6 +403,13 @@ export default function Home() {
                 className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
               >
                 Download Excel
+              </button>
+              <button
+                onClick={downloadReport}
+                title="Download a Markdown audit report of what changed"
+                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
+              >
+                Report
               </button>
             </div>
           </div>

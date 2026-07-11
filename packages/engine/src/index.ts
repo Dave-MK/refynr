@@ -17,11 +17,26 @@ import { numberFixer } from "./fixers/numbers.js";
 import { booleanFixer } from "./fixers/booleans.js";
 import { headerFixer } from "./fixers/headers.js";
 import { vatFixer, sortCodeFixer, companyNumberFixer } from "./fixers/uk.js";
+import { checkConstraints } from "./expectations.js";
 
 export * from "./types.js";
 export { profileTable } from "./profile.js";
 export { scoreTable } from "./score.js";
-export { applyPatches, fromDelimitedText, cellText, isEmptyCell } from "./table.js";
+export { applyPatches, fromDelimitedText, fromJson, cellText, isEmptyCell } from "./table.js";
+export { checkConstraints } from "./expectations.js";
+export {
+  diffTables,
+  type TableDiff,
+  type DiffCell,
+  type ChangedRow,
+  type KeyedRow,
+} from "./diff.js";
+export {
+  buildReport,
+  reportToMarkdown,
+  type RunReport,
+  type ReportRuleLine,
+} from "./report.js";
 export {
   RECIPE_VERSION,
   createRecipe,
@@ -38,6 +53,7 @@ const DEFAULT_OPTIONS: Required<EngineOptions> = {
   dateOrder: "auto",
   dateOutput: "iso",
   disabledRules: [],
+  constraints: [],
 };
 
 /** Registration order = execution order = display order of findings. */
@@ -84,6 +100,12 @@ export function cleanse(
     patches.push(...out.patches);
   }
 
+  // User-defined expectations run after the fixers: advisory pass/fail checks,
+  // never auto-fixed.
+  if (options.constraints?.length) {
+    findings.push(...checkConstraints(table, profile, options.constraints));
+  }
+
   // The denominator is fixed to the ORIGINAL table for both scores. Accepting
   // fixes removes rows (duplicates, blanks), so re-deriving the basis from the
   // cleaned table would shrink the denominator and make the few unfixable
@@ -100,6 +122,9 @@ export function cleanse(
   const remainingFindings = FIXERS.filter((f) => !disabled.has(f.rule)).flatMap(
     (f) => f.run({ table: cleanedTable, profile: cleanedProfile, options: opts }).findings,
   );
+  if (options.constraints?.length) {
+    remainingFindings.push(...checkConstraints(cleanedTable, cleanedProfile, options.constraints));
+  }
   const projectedScore = scoreTable(cleanedProfile, remainingFindings, basis);
 
   return { profile, findings, patches, score, projectedScore };

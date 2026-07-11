@@ -13,7 +13,31 @@ pnpm typecheck                          # all packages
 pnpm --filter @refynr/web dev           # web app on :3000
 pnpm --filter @refynr/extension dev     # extension dev mode
 pnpm --filter @refynr/engine test       # engine tests only
+pnpm --filter @refynr/cli build         # build the headless CLI
+node packages/cli/dist/cli.js --help    # CLI: `clean` + `diff`, CI gates
 ```
+
+## Engine capabilities beyond fixers
+
+The engine (`packages/engine`) also exports, all pure and deterministic:
+- **Recipes** (`recipe.ts`): `createRecipe` / `serializeRecipe` / `parseRecipe`
+  / `runRecipe`. A recipe is re-runnable config (options + skipped rules +
+  constraints) with **no cell data** — safe to store/share. Web shell keeps a
+  browser-local library (`apps/web/lib/recipes.ts`); the CLI replays them.
+- **Expectations** (`expectations.ts`): `checkConstraints` — user-defined
+  pass/fail rules (`Constraint`: not-null/unique/regex/range/allowed-values),
+  threaded via `EngineOptions.constraints`. Advisory only (never auto-fix).
+- **Dataset diff** (`diff.ts`): `diffTables(before, after, key?)` — value-level
+  added/removed/changed/unchanged, key inferred or given. The "what changed
+  since last export?" wedge.
+- **Run report** (`report.ts`): `buildReport` / `reportToMarkdown` — shareable
+  audit of what changed, from patch metadata.
+- **NL commands** (`nl.ts`): `parseInstruction` — deterministic, in-browser
+  plain-English → `EngineOptions` (no network).
+- **JSON input** (`table.ts`): `fromJson` alongside `fromDelimitedText`.
+- **`@refynr/cli`**: headless `clean` (recipes, `--min-score` CI gate,
+  `--report`, `--json`) and `diff` (`--key`, `--fail-on-change`). Keeps the
+  engine pure — its only dep is the engine; Node types are local ambient decls.
 
 ## Architecture rules (locked in — don't relitigate)
 

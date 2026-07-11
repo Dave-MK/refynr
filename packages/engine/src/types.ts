@@ -127,6 +127,28 @@ export interface EngineOptions {
   dateOutput?: "iso" | "uk" | "us";
   /** Rules to skip entirely. */
   disabledRules?: string[];
+  /** User-defined expectations checked as pass/fail advisories (never auto-fixed). */
+  constraints?: Constraint[];
+}
+
+/**
+ * A user-defined expectation about a column — the "expectations-lite" layer.
+ * Constraints are checked and reported (pass/fail), never auto-fixed: refynr
+ * asserts, it doesn't guess a value that would satisfy the rule. Columns are
+ * referenced by header name so a constraint stays valid across re-exports even
+ * if column order changes.
+ */
+export interface Constraint {
+  /** Header name of the column this applies to. */
+  column: string;
+  type: "not-null" | "unique" | "regex" | "range" | "allowed-values";
+  /** For type "regex": a JS regular-expression source (no slashes). */
+  pattern?: string;
+  /** For type "range": inclusive bounds (either may be omitted). */
+  min?: number;
+  max?: number;
+  /** For type "allowed-values": the permitted set (compared case-sensitively). */
+  values?: string[];
 }
 
 export interface CleanseResult {

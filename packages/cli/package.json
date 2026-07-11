@@ -1,0 +1,20 @@
+{
+  "name": "@refynr/cli",
+  "version": "0.1.0",
+  "description": "refynr headless CLI — run cleaning recipes on files, non-destructively, in CI",
+  "type": "module",
+  "bin": {
+    "refynr": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@refynr/engine": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
