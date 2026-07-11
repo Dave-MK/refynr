@@ -14,10 +14,9 @@ import type {
   CleanseRequest,
   CleanseResponse,
 } from "@/workers/cleanse.worker";
-import { AiSummary } from "@/components/AiSummary";
 import { AuthNav } from "@/components/AuthNav";
-import { ScoreCard } from "@/components/ScoreCard";
-import { FindingsPanel } from "@/components/FindingsPanel";
+import { Landing } from "@/components/Landing";
+import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
 import { downloadCsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
@@ -220,6 +219,7 @@ export default function Home() {
       </header>
 
       {!base && (
+        <Landing>
         <section className="rounded-2xl border border-line bg-card p-8">
           <h2 className="text-lg font-semibold text-hi">
             Paste data or upload a spreadsheet
@@ -272,18 +272,19 @@ export default function Home() {
             </p>
           )}
         </section>
+        </Landing>
       )}
 
       {base && working && result && (
         <div className="space-y-5">
-          <ScoreCard score={result.score} projected={result.projectedScore} />
-
-          <AiSummary profile={result.profile} result={result} />
-
-          <FindingsPanel
+          <AnalysisPanel
+            score={result.score}
+            projected={result.projectedScore}
             findings={result.findings}
             enabled={enabledIndices}
             onToggle={toggleFinding}
+            profile={result.profile}
+            result={result}
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
