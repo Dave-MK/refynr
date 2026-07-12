@@ -54,6 +54,7 @@ export default async function AccountPage() {
           <span className="pill border-teal/30 bg-teal/10 text-teal">{plan}</span>
         </div>
 
+        {/* AI insights temporarily disabled — usage readout hidden.
         <div className="mt-6 border-t border-line pt-6">
           <h2 className="label">AI insights today</h2>
           <p className="mt-1 text-sm text-body">
@@ -64,6 +65,7 @@ export default async function AccountPage() {
             Resets daily at 00:00 UTC.
           </p>
         </div>
+        */}
       </div>
 
       <Link

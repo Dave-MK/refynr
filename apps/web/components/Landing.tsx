@@ -97,7 +97,7 @@ export function Landing({ children }: { children: ReactNode }) {
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">What refynr catches</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
-            Deterministic fixes, plus optional AI insight
+            Deterministic fixes you review, one by one
           </p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -107,7 +107,7 @@ export function Landing({ children }: { children: ReactNode }) {
           />
           <Feature
             title="Private by default"
-            body="Cleansing runs 100% in your browser. Your rows never leave your device unless you explicitly ask for an AI summary — and even then, only column stats and a few samples are sent."
+            body="Cleansing runs 100% in your browser. Your rows never leave your device — there's no upload, and nothing is sent to any server."
           />
           <Feature
             title="UK formats, done right"

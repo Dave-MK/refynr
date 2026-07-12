@@ -9,7 +9,9 @@ import type {
 } from "@refynr/engine";
 import { ScoreCard } from "@/components/ScoreCard";
 import { FindingsPanel } from "@/components/FindingsPanel";
-import { AiSummary } from "@/components/AiSummary";
+// AI insights are temporarily disabled (pending a free/paywalled model).
+// Re-enable by uncommenting this import and the "insights" tab + panel below.
+// import { AiSummary } from "@/components/AiSummary";
 
 type Tab = "health" | "findings" | "insights";
 
@@ -41,7 +43,7 @@ export function AnalysisPanel({
   const tabs: readonly [Tab, string][] = [
     ["health", "Data health"],
     ["findings", `Findings · ${findings.length}`],
-    ["insights", "AI insights"],
+    // ["insights", "AI insights"], // AI insights temporarily disabled
   ];
 
   return (
@@ -68,9 +70,11 @@ export function AnalysisPanel({
       <div className={tab === "findings" ? "" : "hidden"}>
         <FindingsPanel findings={findings} enabled={enabled} onToggle={onToggle} />
       </div>
+      {/* AI insights temporarily disabled — re-enable with the import + tab above.
       <div className={tab === "insights" ? "" : "hidden"}>
         <AiSummary profile={profile} result={result} />
       </div>
+      */}
     </div>
   );
 }

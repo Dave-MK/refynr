@@ -693,6 +693,17 @@ describe("dataset diff", () => {
     expect(d.removedColumns).toEqual(["old"]);
   });
 
+  it("counts rows with an empty key as added/removed, never dropping them", () => {
+    const b: Table = { headers: ["id", "v"], rows: [["1", "a"], ["", "orphan-b"]] };
+    const a: Table = { headers: ["id", "v"], rows: [["1", "a"], ["", "orphan-a"]] };
+    const d = diffTables(b, a, "id");
+    // The keyless rows can't be matched, so one is removed and one added —
+    // total row count is conserved, nothing silently disappears.
+    expect(d.added.length + d.removed.length + d.changed.length + d.unchanged).toBe(3);
+    expect(d.added.some((r) => r.key === "(no key)")).toBe(true);
+    expect(d.removed.some((r) => r.key === "(no key)")).toBe(true);
+  });
+
   it("falls back to positional diff without a usable key", () => {
     // Repeated values mean no column is a usable key -> positional comparison.
     const d = diffTables(

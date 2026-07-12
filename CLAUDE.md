@@ -109,8 +109,14 @@ finding copy must be grammatical for count 1 (use `n()`/`verb()` helpers).
   set them (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
   `SUPABASE_SERVICE_ROLE_KEY`). Only AI insights are gated; in-browser
   cleansing needs no account (it's the activation funnel).
-- AI insights need `ANTHROPIC_API_KEY` in `apps/web/.env.local`
-  (see `.env.example`); everything else works without it.
+- **AI insights are TEMPORARILY DISABLED** (pending a free/paywalled model).
+  The "AI insights" tab is commented out in `AnalysisPanel.tsx`, related copy is
+  removed from `Landing`/`login`/`account`, and `/api/insights` returns 503
+  unless `REFYNR_INSIGHTS_ENABLED=1` (off by default, so it can't incur cost).
+  The full implementation (`AiSummary.tsx`, the route, `/api/usage`, `plans.ts`)
+  is preserved intact — re-enable by reversing those comments + setting the env
+  var. AI insights need `ANTHROPIC_API_KEY` in `apps/web/.env.local`
+  (see `.env.example`) when re-enabled; everything else works without it.
 
 ## Style
 

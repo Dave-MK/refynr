@@ -119,7 +119,12 @@ export function diffTables(
 
     after.rows.forEach((aRow, ar) => {
       const v = aRow[ka];
-      if (isEmptyCell(v)) return; // keyless new rows treated as added below
+      // A row with no key value can't be matched to a baseline row, so it
+      // counts as added rather than silently vanishing from the diff.
+      if (isEmptyCell(v)) {
+        added.push({ key: "(no key)", row: ar, values: aRow });
+        return;
+      }
       const k = keyOf(v);
       afterKeys.add(k);
       const br = beforeByKey.get(k);
@@ -134,7 +139,11 @@ export function diffTables(
 
     before.rows.forEach((bRow, br) => {
       const v = bRow[kb];
-      if (isEmptyCell(v)) return;
+      // Likewise, an unmatchable keyless baseline row counts as removed.
+      if (isEmptyCell(v)) {
+        removed.push({ key: "(no key)", row: br, values: bRow });
+        return;
+      }
       if (!afterKeys.has(keyOf(v))) removed.push({ key: cellText(v), row: br, values: bRow });
     });
   } else {

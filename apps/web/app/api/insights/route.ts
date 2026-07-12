@@ -13,7 +13,14 @@ export const maxDuration = 60;
  * AI insight endpoint. Receives ONLY column profiles, finding summaries, and
  * scores — never the dataset itself. Deterministic rules find and fix issues;
  * this layer explains what they mean.
+ *
+ * TEMPORARILY DISABLED: this is a paid endpoint (per-call AI cost), off until
+ * we settle free vs. paywalled access. It is OFF unless REFYNR_INSIGHTS_ENABLED
+ * is set to "1", so it can never incur cost by default. The full implementation
+ * below is untouched — flip the env var (or the default here) to restore it.
+ * The UI entry point (the "AI insights" tab) is commented out in AnalysisPanel.
  */
+const INSIGHTS_ENABLED = process.env.REFYNR_INSIGHTS_ENABLED === "1";
 
 interface InsightRequest {
   profile: TableProfile;
@@ -184,6 +191,13 @@ async function refund(userId: string | null) {
 }
 
 export async function POST(request: Request) {
+  if (!INSIGHTS_ENABLED) {
+    return NextResponse.json(
+      { error: "AI insights are temporarily unavailable." },
+      { status: 503 },
+    );
+  }
+
   let body: InsightRequest;
   try {
     body = (await request.json()) as InsightRequest;
