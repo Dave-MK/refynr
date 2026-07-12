@@ -12,7 +12,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@refynr/engine": "workspace:*"
+    "@refynr/engine": "workspace:*",
+    "hyparquet": "^1.26.2"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

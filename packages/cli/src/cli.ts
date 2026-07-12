@@ -12,8 +12,10 @@ import {
   parseRecipe,
   reportToMarkdown,
   runRecipe,
+  type CellValue,
   type Table,
 } from "@refynr/engine";
+import { parquetMetadataAsync, parquetReadObjects } from "hyparquet";
 
 /**
  * refynr headless CLI — "recipes as code". Runs the exact same deterministic
@@ -47,9 +49,10 @@ diff — compare two versions of a dataset (row/cell level):
   --fail-on-change       Exit non-zero if anything changed (CI gate)
 
 Common:
+  --limit <n>            Read at most n rows (useful for previewing huge files)
   -h, --help             Show this help
 
-Input files are never modified.`;
+Inputs: CSV, TSV, JSON, and Parquet. Input files are never modified.`;
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -68,12 +71,37 @@ function toCsv(table: Table): string {
   return lines.join("\n");
 }
 
-function loadTable(path: string): Table {
+/** Coerce a Parquet value (BigInt, Date, nested object) to a flat CellValue. */
+function toCell(v: unknown): CellValue {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "bigint") return Number.isSafeInteger(Number(v)) ? Number(v) : v.toString();
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "object") return JSON.stringify(v);
+  if (typeof v === "number" || typeof v === "boolean" || typeof v === "string") return v;
+  return String(v);
+}
+
+async function parquetToTable(path: string, rowLimit?: number): Promise<Table> {
+  const fb = readFileSync(path);
+  const ab = fb.buffer.slice(fb.byteOffset, fb.byteOffset + fb.byteLength);
+  const meta = await parquetMetadataAsync(ab);
+  const total = Number(meta.num_rows);
+  const rowEnd = rowLimit && rowLimit > 0 ? Math.min(total, rowLimit) : total;
+  const records = (await parquetReadObjects({ file: ab, rowEnd })) as Record<string, unknown>[];
+  const headerSet = new Set<string>();
+  for (const rec of records.slice(0, 50)) for (const k of Object.keys(rec)) headerSet.add(k);
+  const headers = [...headerSet];
+  const rows: CellValue[][] = records.map((rec) => headers.map((h) => toCell(rec[h])));
+  return { headers, rows };
+}
+
+async function loadTable(path: string, rowLimit?: number): Promise<Table> {
+  if (/\.parquet$/i.test(path)) return parquetToTable(path, rowLimit);
   const text = readFileSync(path, "utf8");
   return /\.json$/i.test(path) ? fromJson(text) : fromDelimitedText(text);
 }
 
-function runDiff(argv: string[], positional: string[]): number {
+async function runDiff(argv: string[], positional: string[]): Promise<number> {
   const beforePath = positional[1];
   const afterPath = positional[2];
   if (!beforePath || !afterPath) {
@@ -86,11 +114,12 @@ function runDiff(argv: string[], positional: string[]): number {
       return 1;
     }
   }
+  const limit = flag(argv, "--limit") ? Number(flag(argv, "--limit")) : undefined;
   let before: Table;
   let after: Table;
   try {
-    before = loadTable(beforePath);
-    after = loadTable(afterPath);
+    before = await loadTable(beforePath, limit);
+    after = await loadTable(afterPath, limit);
   } catch (e) {
     err(`Error: ${e instanceof Error ? e.message : String(e)}`);
     return 1;
@@ -128,7 +157,7 @@ function runDiff(argv: string[], positional: string[]): number {
   return 0;
 }
 
-function main(): number {
+async function main(): Promise<number> {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || has(argv, "-h") || has(argv, "--help")) {
     err(HELP);
@@ -150,9 +179,10 @@ function main(): number {
     return 1;
   }
 
+  const limit = flag(argv, "--limit") ? Number(flag(argv, "--limit")) : undefined;
   let table: Table;
   try {
-    table = loadTable(file);
+    table = await loadTable(file, limit);
   } catch (e) {
     err(`Error reading ${file}: ${e instanceof Error ? e.message : String(e)}`);
     return 1;
@@ -228,4 +258,10 @@ function main(): number {
   return 0;
 }
 
-process.exit(main());
+main().then(
+  (code) => process.exit(code),
+  (e) => {
+    err(`Unexpected error: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  },
+);

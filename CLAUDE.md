@@ -35,9 +35,20 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
 - **NL commands** (`nl.ts`): `parseInstruction` — deterministic, in-browser
   plain-English → `EngineOptions` (no network).
 - **JSON input** (`table.ts`): `fromJson` alongside `fromDelimitedText`.
+- **Parquet input** (web shell only): the cleanse worker reads Parquet via
+  `hyparquet` (pure JS, no WASM) → `Table`, capped at 100k rows/session with a
+  disclosed banner. Not in the engine — engine stays zero-dep.
 - **`@refynr/cli`**: headless `clean` (recipes, `--min-score` CI gate,
-  `--report`, `--json`) and `diff` (`--key`, `--fail-on-change`). Keeps the
-  engine pure — its only dep is the engine; Node types are local ambient decls.
+  `--report`, `--json`) and `diff` (`--key`, `--fail-on-change`). Reads CSV/TSV/
+  JSON/Parquet (`--limit` caps rows). Its only deps are the engine + hyparquet;
+  Node types are local ambient decls (`node-min.d.ts`), no `@types/node`.
+- **Web diff view** (`DatasetDiff.tsx`): the browser shell for `diffTables` —
+  load a dataset, hit **⇄ Compare**, pick a second file; the worker parses it
+  with a `tag: "compare"` (no re-cleanse) and the diff renders row/cell-level.
+- **Python wrapper** (`packages/refynr-py`): thin subprocess shell over the CLI
+  (`refynr.clean` / `clean_to_rows` / `clean_to_dataframe` / `diff`) for
+  notebooks. Not in the pnpm workspace (no package.json). Needs Node + built CLI;
+  override discovery with `REFYNR_CLI` / `REFYNR_NODE`.
 
 ## Architecture rules (locked in — don't relitigate)
 
@@ -71,6 +82,10 @@ finding copy must be grammatical for count 1 (use `n()`/`verb()` helpers).
 
 - **Never run `next build` while the dev server is running** — they share
   `.next` and the dev server corrupts (webpack module errors). Stop dev first.
+- **Never `push(...bigArray)` / `Math.max(...bigArray)` on row-sized arrays** —
+  the engine now handles 100k+ rows (Parquet), and spreading a per-row array
+  into a call overflows the stack (`Maximum call stack size exceeded`). Use a
+  loop or `reduce`. There's a 60k-row regression test guarding this.
 - `xlsx` is pinned to the SheetJS CDN tarball (npm's 0.18.5 has known CVEs).
 - Engine builds to `dist/` via tsc; the web app and extension consume the
   built output — rebuild the engine (`pnpm --filter @refynr/engine build`)
@@ -83,7 +98,13 @@ finding copy must be grammatical for count 1 (use `n()`/`verb()` helpers).
   calls `refund_insight`. Quotas live in `apps/web/lib/plans.ts` (code, not the
   DB) so paywalling later is a config change. `/api/clean` is a bearer-token
   dev API (`REFYNR_API_KEY`), disabled (404) when the key is unset. Schema is
-  `apps/web/supabase/migrations/0001_auth_metering.sql`. **Without the Supabase
+  `apps/web/supabase/migrations/0001_auth_metering.sql`. **Shared recipe
+  library** (`0002_shared_recipes.sql` + `lib/recipes-cloud.ts` +
+  `CloudRecipes.tsx`): signed-in users sync recipes to `cloud_recipes` and can
+  mark them `shared` (visible instance-wide = team library). CRUD is client-side
+  under RLS (recipes are pure config); the cloud UI only shows when
+  `supabaseConfigured && user`, else the browser-local library is the whole
+  story. **Without the Supabase
   env vars the gate is skipped** so local dev works offline — production must
   set them (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
   `SUPABASE_SERVICE_ROLE_KEY`). Only AI insights are gated; in-browser

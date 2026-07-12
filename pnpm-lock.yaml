@@ -57,6 +57,9 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.47.10
         version: 2.110.1
+      hyparquet:
+        specifier: ^1.26.2
+        version: 1.26.2
       next:
         specifier: ^15.5.6
         version: 15.5.20(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -94,6 +97,9 @@ importers:
       '@refynr/engine':
         specifier: workspace:*
         version: link:../engine
+      hyparquet:
+        specifier: ^1.26.2
+        version: 1.26.2
     devDependencies:
       typescript:
         specifier: ^5.9.3
@@ -1638,6 +1644,9 @@ packages:
 
   htmlparser2@10.1.0:
     resolution: {integrity: sha512-VTZkM9GWRAtEpveh7MSF6SjjrpNVNNVJfFup7xTY3UpFtm67foy9HDVXneLtFVt4pMz5kZtgNcvCniNFb1hlEQ==}
+
+  hyparquet@1.26.2:
+    resolution: {integrity: sha512-6qjyK7R2tZ4vnYP1J8NpcCeDPK1UIYk3xh5XgtQUnUM1iwkYbvI6Mz3xtmpMd6AfCCeoUoJVbEq29k5GReZRWA==}
 
   iceberg-js@0.8.1:
     resolution: {integrity: sha512-1dhVQZXhcHje7798IVM+xoo/1ZdVfzOMIc8/rgVSijRK38EDqOJoGula9N/8ZI5RD8QTxNQtK/Gozpr+qUqRRA==}
@@ -3967,6 +3976,8 @@ snapshots:
       domhandler: 5.0.3
       domutils: 3.2.2
       entities: 7.0.1
+
+  hyparquet@1.26.2: {}
 
   iceberg-js@0.8.1: {}
 

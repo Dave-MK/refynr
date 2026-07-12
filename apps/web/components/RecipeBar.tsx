@@ -16,6 +16,9 @@ import {
   removeRecipe,
   upsertRecipe,
 } from "@/lib/recipes";
+import { CloudRecipes } from "@/components/CloudRecipes";
+import { useUser } from "@/lib/supabase/useUser";
+import { supabaseConfigured } from "@/lib/supabase/config";
 
 /**
  * Plain-English commands + saved recipes. This is the shell for the two
@@ -46,6 +49,7 @@ export function RecipeBar({
   const [name, setName] = useState("");
   const [importError, setImportError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const { user } = useUser();
 
   // Expectations editor state.
   const [ruleCol, setRuleCol] = useState("");
@@ -258,6 +262,18 @@ export function RecipeBar({
           </ul>
         )}
       </div>
+
+      {supabaseConfigured && user && (
+        <>
+          <div className="my-4 h-px bg-line" />
+          <CloudRecipes
+            user={user}
+            currentOptions={currentOptions}
+            currentSkipRules={currentSkipRules}
+            onApplyRecipe={onApplyRecipe}
+          />
+        </>
+      )}
 
       <div className="my-4 h-px bg-line" />
 

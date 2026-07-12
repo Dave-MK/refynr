@@ -128,7 +128,7 @@ export const duplicateFixer: Fixer = {
       for (const [fp, rowsForFp] of printGroups) {
         const root = find(fp);
         const bucket = byRoot.get(root);
-        if (bucket) bucket.push(...rowsForFp);
+        if (bucket) for (const r of rowsForFp) bucket.push(r);
         else byRoot.set(root, [...rowsForFp]);
       }
       clusters.length = 0;

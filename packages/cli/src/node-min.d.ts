@@ -4,7 +4,14 @@
  * builds with nothing but the workspace engine — no lockfile churn.
  */
 declare module "node:fs" {
+  /** Minimal view of a Node Buffer — enough to hand its bytes to hyparquet. */
+  interface FileBuffer {
+    buffer: ArrayBuffer;
+    byteOffset: number;
+    byteLength: number;
+  }
   export function readFileSync(path: string, encoding: "utf8"): string;
+  export function readFileSync(path: string): FileBuffer;
   export function writeFileSync(path: string, data: string): void;
   export function existsSync(path: string): boolean;
 }

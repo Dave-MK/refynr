@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "refynr"
+version = "0.1.0"
+description = "Python wrapper for the refynr data-cleaning CLI — clean and diff tabular data from a notebook, non-destructively."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["data-quality", "data-cleaning", "csv", "parquet", "dataframe"]
+dependencies = []
+
+[project.optional-dependencies]
+pandas = ["pandas"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["refynr"]

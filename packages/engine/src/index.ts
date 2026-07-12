@@ -96,14 +96,16 @@ export function cleanse(
   for (const fixer of FIXERS) {
     if (disabled.has(fixer.rule)) continue;
     const out = fixer.run({ table, profile, options: opts });
-    findings.push(...out.findings);
-    patches.push(...out.patches);
+    // Loops, not spread: a fixer can emit one patch per row, and
+    // `push(...hugeArray)` overflows the call stack past ~100k elements.
+    for (const f of out.findings) findings.push(f);
+    for (const p of out.patches) patches.push(p);
   }
 
   // User-defined expectations run after the fixers: advisory pass/fail checks,
   // never auto-fixed.
   if (options.constraints?.length) {
-    findings.push(...checkConstraints(table, profile, options.constraints));
+    for (const f of checkConstraints(table, profile, options.constraints)) findings.push(f);
   }
 
   // The denominator is fixed to the ORIGINAL table for both scores. Accepting
@@ -123,7 +125,8 @@ export function cleanse(
     (f) => f.run({ table: cleanedTable, profile: cleanedProfile, options: opts }).findings,
   );
   if (options.constraints?.length) {
-    remainingFindings.push(...checkConstraints(cleanedTable, cleanedProfile, options.constraints));
+    for (const f of checkConstraints(cleanedTable, cleanedProfile, options.constraints))
+      remainingFindings.push(f);
   }
   const projectedScore = scoreTable(cleanedProfile, remainingFindings, basis);
 

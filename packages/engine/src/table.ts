@@ -59,7 +59,7 @@ export function fromDelimitedText(text: string): Table {
   const delimiter = normalized.includes("\t") ? "\t" : ",";
   const grid = parseDelimited(normalized, delimiter);
 
-  const width = Math.max(...grid.map((r) => r.length));
+  const width = grid.reduce((w, r) => Math.max(w, r.length), 0);
   const pad = (r: string[]): CellValue[] => {
     const out: CellValue[] = [...r];
     while (out.length < width) out.push(null);

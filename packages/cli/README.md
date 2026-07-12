@@ -23,13 +23,19 @@ refynr clean data.csv --out clean.csv --report report.md
 # Replay a recipe exported from the web app (recipes are pure config, no data)
 refynr clean monthly-export.csv --recipe crm.json --out clean.csv
 
-# JSON in, machine-readable summary out
+# JSON or Parquet in, machine-readable summary out
 refynr clean api-dump.json --json
+refynr clean events.parquet --out clean.csv
+
+# Preview the first N rows of a huge file
+refynr clean big.parquet --limit 100000 --min-score 85
 ```
 
-CSV, TSV and JSON inputs are supported (`.json` is parsed as an array of
-records). With no `--out`, the cleaned CSV goes to stdout, so summaries and
-diagnostics always go to stderr — the output stays pipe-clean.
+CSV, TSV, JSON and **Parquet** inputs are supported (`.json` is parsed as an
+array of records; Parquet is read with the pure-JS `hyparquet`, Snappy or
+uncompressed). `--limit <n>` caps how many rows are read. With no `--out`, the
+cleaned CSV goes to stdout, so summaries and diagnostics always go to stderr —
+the output stays pipe-clean.
 
 ## Quality gate for CI
 

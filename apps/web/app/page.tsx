@@ -22,6 +22,7 @@ import { AuthNav } from "@/components/AuthNav";
 import { Landing } from "@/components/Landing";
 import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
+import { DatasetDiff } from "@/components/DatasetDiff";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
 import { downloadCsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
@@ -54,8 +55,17 @@ export default function Home() {
   const [mode, setMode] = useState<ViewMode>("diff");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Set when a large source (e.g. Parquet) was loaded as a capped preview.
+  const [truncated, setTruncated] = useState<{ shown: number; total: number } | null>(null);
+  // Version-comparison state — a second file to diff the loaded one against.
+  const [baseName, setBaseName] = useState("data");
+  const [compareTable, setCompareTable] = useState<Table | null>(null);
+  const [compareName, setCompareName] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  const compareInput = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
+  const pendingName = useRef("data");
+  const pendingCompareName = useRef("comparison");
 
   useEffect(() => {
     const worker = new Worker(
@@ -64,14 +74,28 @@ export default function Home() {
     worker.onmessage = (e: MessageEvent<CleanseResponse>) => {
       setBusy(false);
       if (!e.data.ok) {
-        setError(`Couldn't read that data: ${e.data.error}`);
+        setError(
+          e.data.tag === "compare"
+            ? `Couldn't read the comparison file: ${e.data.error}`
+            : `Couldn't read that data: ${e.data.error}`,
+        );
+        return;
+      }
+      if (e.data.tag === "compare") {
+        setCompareTable(e.data.table);
+        setCompareName(pendingCompareName.current);
+        setError(null);
         return;
       }
       setBase({ table: e.data.table, result: e.data.result });
+      setBaseName(pendingName.current);
       setManualEdits(new Map());
       setDisabled(new Set());
       setOptions({});
       setSkipRules(new Set());
+      setTruncated(e.data.truncated ?? null);
+      setCompareTable(null); // a fresh dataset invalidates any prior comparison
+      setCompareName("");
       setMode("diff");
       setError(null);
     };
@@ -86,22 +110,48 @@ export default function Home() {
   }, []);
 
   const analyse = useCallback(
-    (text: string) => submit({ kind: "text", text }),
+    (text: string, name = "pasted data") => {
+      pendingName.current = name;
+      submit({ kind: "text", text });
+    },
     [submit],
   );
 
   const onFile = useCallback(
     async (file: File) => {
+      pendingName.current = file.name;
       if (/\.(xlsx|xls)$/i.test(file.name)) {
         const buffer = await file.arrayBuffer();
         submit({ kind: "xlsx", buffer, name: file.name }, [buffer]);
+      } else if (/\.parquet$/i.test(file.name)) {
+        const buffer = await file.arrayBuffer();
+        submit({ kind: "parquet", buffer, name: file.name }, [buffer]);
       } else if (/\.json$/i.test(file.name)) {
         submit({ kind: "json", text: await file.text() });
       } else {
-        analyse(await file.text());
+        analyse(await file.text(), file.name);
       }
     },
     [analyse, submit],
+  );
+
+  // Load a second file to compare the current dataset against (version diff).
+  const onCompareFile = useCallback(
+    async (file: File) => {
+      pendingCompareName.current = file.name;
+      if (/\.(xlsx|xls)$/i.test(file.name)) {
+        const buffer = await file.arrayBuffer();
+        submit({ kind: "xlsx", buffer, name: file.name, tag: "compare" }, [buffer]);
+      } else if (/\.parquet$/i.test(file.name)) {
+        const buffer = await file.arrayBuffer();
+        submit({ kind: "parquet", buffer, name: file.name, tag: "compare" }, [buffer]);
+      } else if (/\.json$/i.test(file.name)) {
+        submit({ kind: "json", text: await file.text(), tag: "compare" });
+      } else {
+        submit({ kind: "text", text: await file.text(), tag: "compare" });
+      }
+    },
+    [submit],
   );
 
   // original + manual edits — the working table everything derives from.
@@ -282,6 +332,8 @@ export default function Home() {
               onClick={() => {
                 setBase(null);
                 setPasted("");
+                setCompareTable(null);
+                setCompareName("");
               }}
               className="font-mono text-xs text-dim transition hover:text-body"
             >
@@ -320,12 +372,12 @@ export default function Home() {
               disabled={busy}
               className="rounded-lg border border-line2 bg-card2 px-5 py-2.5 text-sm font-medium text-body transition hover:border-mut disabled:opacity-40"
             >
-              Upload CSV / Excel / JSON
+              Upload CSV / Excel / JSON / Parquet
             </button>
             <input
               ref={fileInput}
               type="file"
-              accept=".csv,.tsv,.txt,.xlsx,.xls,.json"
+              accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -334,7 +386,7 @@ export default function Home() {
               }}
             />
             <button
-              onClick={() => analyse(SAMPLE_DATA)}
+              onClick={() => analyse(SAMPLE_DATA, "sample data")}
               className="font-mono text-xs font-semibold text-teal transition hover:text-cyan"
             >
               › try sample data
@@ -351,6 +403,20 @@ export default function Home() {
 
       {base && working && result && (
         <div className="space-y-5">
+          {truncated && (
+            <p className="rounded-lg border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-body">
+              This file has{" "}
+              <span className="font-mono font-semibold text-hi">
+                {truncated.total.toLocaleString("en-GB")}
+              </span>{" "}
+              rows — refynr loaded the first{" "}
+              <span className="font-mono font-semibold text-hi">
+                {truncated.shown.toLocaleString("en-GB")}
+              </span>{" "}
+              for this session. The cleaned export will contain those rows.
+            </p>
+          )}
+
           <RecipeBar
             currentOptions={options}
             currentSkipRules={currentSkipRules}
@@ -411,8 +477,39 @@ export default function Home() {
               >
                 Report
               </button>
+              <button
+                onClick={() => compareInput.current?.click()}
+                title="Compare this dataset against another version"
+                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
+              >
+                ⇄ Compare
+              </button>
+              <input
+                ref={compareInput}
+                type="file"
+                accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void onCompareFile(f);
+                  e.target.value = "";
+                }}
+              />
             </div>
           </div>
+
+          {compareTable && (
+            <DatasetDiff
+              before={base.table}
+              after={compareTable}
+              beforeName={baseName}
+              afterName={compareName}
+              onClose={() => {
+                setCompareTable(null);
+                setCompareName("");
+              }}
+            />
+          )}
 
           <DataTable
             original={base.table}

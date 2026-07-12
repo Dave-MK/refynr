@@ -723,6 +723,18 @@ describe("run report", () => {
   });
 });
 
+describe("large inputs", () => {
+  it("cleanses a table with 60k patch-producing rows without overflowing the stack", () => {
+    // Every cell has whitespace, so the whitespace fixer alone emits ~60k
+    // patches — a regression guard against `push(...hugeArray)` blowing up.
+    const rows = Array.from({ length: 60000 }, (_, i) => [`  user ${i} `]);
+    const table: Table = { headers: ["Name"], rows };
+    expect(() => cleanse(table)).not.toThrow();
+    const result = cleanse(table);
+    expect(result.patches.length).toBeGreaterThan(50000);
+  });
+});
+
 describe("JSON input", () => {
   it("parses an array of records with a union of keys", () => {
     const t = fromJson('[{"a":1,"b":"x"},{"a":2,"c":true}]');
