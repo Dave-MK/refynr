@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import {
   applyPatches,
   buildReport,
@@ -24,7 +24,7 @@ import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
 import { DatasetDiff } from "@/components/DatasetDiff";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
-import { downloadCsv } from "@/lib/csv";
+import { downloadCsv, toTsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
 import { SAMPLE_DATA } from "@/lib/sample";
 
@@ -61,6 +61,12 @@ export default function Home() {
   const [baseName, setBaseName] = useState("data");
   const [compareTable, setCompareTable] = useState<Table | null>(null);
   const [compareName, setCompareName] = useState("");
+  // "Copy" button feedback, drag-over highlight, and finding→cell locating.
+  const [copied, setCopied] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [highlightKeys, setHighlightKeys] = useState<Set<string>>(new Set());
+  const [scrollToKey, setScrollToKey] = useState<string | null>(null);
+  const [scrollNonce, setScrollNonce] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const compareInput = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -96,6 +102,8 @@ export default function Home() {
       setTruncated(e.data.truncated ?? null);
       setCompareTable(null); // a fresh dataset invalidates any prior comparison
       setCompareName("");
+      setHighlightKeys(new Set());
+      setScrollToKey(null);
       setMode("diff");
       setError(null);
     };
@@ -317,8 +325,114 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }, [result, accepted]);
 
+  // Copy the cleaned table to the clipboard as TSV — paste straight back into
+  // Excel or Google Sheets, no file download needed.
+  const copyCleaned = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(toTsv(cleaned));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      setError("Couldn't access the clipboard — use Download CSV instead.");
+    }
+  }, [cleaned]);
+
+  // Accept every fixable fix at once, or clear them all.
+  const onSetAll = useCallback(
+    (accept: boolean) => {
+      if (!result) return;
+      if (accept) {
+        setDisabled(new Set());
+        setSkipRules(new Set());
+      } else {
+        const all = new Set<string>();
+        result.findings.forEach((f) => {
+          if (f.patchIds.length > 0) all.add(findingKey(f));
+        });
+        setDisabled(all);
+      }
+    },
+    [result],
+  );
+
+  // Jump to and highlight the cells a finding refers to.
+  const onLocate = useCallback(
+    (index: number) => {
+      const f = result?.findings[index];
+      if (!f || !result) return;
+      const keys = new Set<string>();
+      if (f.patchIds.length > 0) {
+        for (const p of result.patches) {
+          if (p.rule !== f.rule) continue;
+          if (p.kind === "cell") keys.add(`${p.cell.row}:${p.cell.col}`);
+          else if (p.kind === "remove-row") keys.add(`${p.row}:0`);
+        }
+      }
+      if (f.cells) for (const c of f.cells) keys.add(`${c.row}:${c.col}`);
+      if (keys.size === 0) return;
+
+      let target: string | null = null;
+      let minRow = Infinity;
+      for (const k of keys) {
+        const r = Number(k.split(":")[0]);
+        if (r < minRow) { minRow = r; target = k; }
+      }
+      setMode("diff"); // the Changes view is where patches / advisories render
+      setHighlightKeys(keys);
+      setScrollToKey(target);
+      setScrollNonce((n) => n + 1);
+    },
+    [result],
+  );
+
+  // Drag-and-drop a file anywhere onto the page.
+  const onDrop = useCallback(
+    (e: ReactDragEvent) => {
+      e.preventDefault();
+      setDragActive(false);
+      const file = e.dataTransfer.files?.[0];
+      if (file) void onFile(file);
+    },
+    [onFile],
+  );
+
+  // Paste tabular data with Ctrl/Cmd+V anywhere (when nothing's loaded and the
+  // focus isn't already in a text field).
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      if (base) return;
+      const el = document.activeElement;
+      if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) return;
+      const text = e.clipboardData?.getData("text");
+      if (text && text.trim()) {
+        e.preventDefault();
+        analyse(text, "pasted data");
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [base, analyse]);
+
   return (
-    <main className="mx-auto max-w-[960px] px-5 py-8">
+    <main
+      className="relative mx-auto max-w-[960px] px-5 py-8"
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!dragActive) setDragActive(true);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget === e.target) setDragActive(false);
+      }}
+      onDrop={onDrop}
+    >
+      {dragActive && (
+        <div className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-ink/70 backdrop-blur-sm">
+          <div className="rounded-2xl border-2 border-dashed border-teal/60 bg-card px-10 py-8 text-center">
+            <p className="text-lg font-semibold text-hi">Drop your file to clean it</p>
+            <p className="mt-1 font-mono text-xs text-mut">CSV · Excel · JSON · Parquet</p>
+          </div>
+        </div>
+      )}
       <header className="mb-8 flex items-center justify-between">
         <h1 className="text-[22px] font-bold tracking-tight text-hi">
           refynr<span className="text-teal">.</span>
@@ -403,6 +517,22 @@ export default function Home() {
 
       {base && working && result && (
         <div className="space-y-5">
+          <p className="font-mono text-[12px] text-mut">
+            <span className="text-body">{baseName}</span> ·{" "}
+            <span className="tabular-nums text-hi">
+              {base.table.rows.length.toLocaleString("en-GB")}
+            </span>{" "}
+            rows ×{" "}
+            <span className="tabular-nums text-hi">{base.table.headers.length}</span>{" "}
+            columns
+          </p>
+
+          {error && (
+            <p className="rounded-lg border border-coral/25 bg-coral/10 px-4 py-3 text-sm text-coral">
+              {error}
+            </p>
+          )}
+
           {truncated && (
             <p className="rounded-lg border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-body">
               This file has{" "}
@@ -431,6 +561,8 @@ export default function Home() {
             findings={result.findings}
             enabled={enabledIndices}
             onToggle={toggleFinding}
+            onSetAll={onSetAll}
+            onLocate={onLocate}
             profile={result.profile}
             result={result}
           />
@@ -459,8 +591,15 @@ export default function Home() {
             </div>
             <div className="flex gap-2.5">
               <button
-                onClick={() => downloadCsv(cleaned, "refynr-cleaned.csv")}
+                onClick={() => void copyCleaned()}
+                title="Copy the cleaned data — paste straight into Excel or Google Sheets"
                 className="rounded-lg bg-gradient-to-r from-teal to-cyan px-5 py-2 text-sm font-semibold text-ink shadow-[0_0_18px_rgba(45,212,191,0.35)] transition hover:brightness-110"
+              >
+                {copied ? "✓ Copied" : "Copy"}
+              </button>
+              <button
+                onClick={() => downloadCsv(cleaned, "refynr-cleaned.csv")}
+                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
               >
                 Download CSV
               </button>
@@ -521,6 +660,9 @@ export default function Home() {
             headerPatches={accepted.headerPatches}
             mode={mode}
             onEditCell={onEditCell}
+            highlightKeys={highlightKeys}
+            scrollToKey={scrollToKey}
+            scrollNonce={scrollNonce}
           />
 
           <p className="pb-8 text-center font-mono text-[11px] leading-relaxed text-dim">

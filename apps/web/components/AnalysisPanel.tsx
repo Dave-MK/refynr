@@ -27,6 +27,8 @@ export function AnalysisPanel({
   findings,
   enabled,
   onToggle,
+  onSetAll,
+  onLocate,
   profile,
   result,
 }: {
@@ -35,6 +37,8 @@ export function AnalysisPanel({
   findings: Finding[];
   enabled: Set<number>;
   onToggle: (index: number) => void;
+  onSetAll: (accept: boolean) => void;
+  onLocate: (index: number) => void;
   profile: TableProfile;
   result: CleanseResult;
 }) {
@@ -68,7 +72,13 @@ export function AnalysisPanel({
         <ScoreCard score={score} projected={projected} />
       </div>
       <div className={tab === "findings" ? "" : "hidden"}>
-        <FindingsPanel findings={findings} enabled={enabled} onToggle={onToggle} />
+        <FindingsPanel
+          findings={findings}
+          enabled={enabled}
+          onToggle={onToggle}
+          onSetAll={onSetAll}
+          onLocate={onLocate}
+        />
       </div>
       {/* AI insights temporarily disabled — re-enable with the import + tab above.
       <div className={tab === "insights" ? "" : "hidden"}>

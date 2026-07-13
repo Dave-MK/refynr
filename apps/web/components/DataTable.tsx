@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cellText, type CellPatch, type CellValue, type Table } from "@refynr/engine";
 
 export type ViewMode = "original" | "diff" | "cleaned";
@@ -65,6 +65,9 @@ export function DataTable({
   headerPatches,
   mode,
   onEditCell,
+  highlightKeys,
+  scrollToKey,
+  scrollNonce,
 }: {
   /** The untouched upload. */
   original: Table;
@@ -82,9 +85,21 @@ export function DataTable({
   headerPatches: Map<number, { before: string; after: string }>;
   mode: ViewMode;
   onEditCell: (row: number, col: number, value: CellValue) => void;
+  /** Cells to ring-highlight (from clicking a finding), keyed "row:col". */
+  highlightKeys?: Set<string>;
+  /** The one cell to scroll into view; `scrollNonce` retriggers the scroll. */
+  scrollToKey?: string | null;
+  scrollNonce?: number;
 }) {
   const source = mode === "cleaned" ? cleaned : mode === "diff" ? working : original;
   const rows = source.rows.slice(0, ROW_CAP);
+  const scrollRef = useRef<HTMLTableCellElement>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [scrollNonce]);
+
+  const HL = "shadow-[inset_0_0_0_2px_rgba(45,212,191,0.8)]";
 
   return (
     <section className="overflow-hidden rounded-2xl border border-line bg-card">
@@ -127,13 +142,16 @@ export function DataTable({
                   </td>
                   {row.map((v, c) => {
                     const key = `${r}:${c}`;
+                    const hl = highlightKeys?.has(key) ? ` ${HL}` : "";
+                    const cellRef = scrollToKey === key ? scrollRef : undefined;
                     const patch =
                       mode === "diff" && !removed ? cellPatches.get(key) : undefined;
                     if (patch) {
                       return (
                         <td
                           key={c}
-                          className="whitespace-nowrap px-3 py-2"
+                          ref={cellRef}
+                          className={`whitespace-nowrap px-3 py-2${hl}`}
                           title={`${patch.reason} (confidence ${Math.round(patch.confidence * 100)}%)`}
                         >
                           <span className="rounded bg-coral/10 px-1.5 py-0.5 text-coral/90 line-through decoration-coral/50">
@@ -150,7 +168,7 @@ export function DataTable({
                       mode === "diff" && !removed ? editableCells.get(key) : undefined;
                     if (editable) {
                       return (
-                        <td key={c} className="px-2 py-1.5">
+                        <td key={c} ref={cellRef} className={`px-2 py-1.5${hl}`}>
                           <CellEditor
                             value={cellText(v)}
                             flagged={editable.flagged}
@@ -163,7 +181,8 @@ export function DataTable({
                     return (
                       <td
                         key={c}
-                        className={`whitespace-nowrap px-3 py-2 ${removed ? "text-mut" : "text-body"}`}
+                        ref={cellRef}
+                        className={`whitespace-nowrap px-3 py-2 ${removed ? "text-mut" : "text-body"}${hl}`}
                       >
                         {cellText(v) || (removed ? "∅" : "")}
                       </td>
