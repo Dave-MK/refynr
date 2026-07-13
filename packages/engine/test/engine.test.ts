@@ -5,9 +5,12 @@ import {
   cleanse,
   createRecipe,
   diffTables,
+  findReplace,
   fromDelimitedText,
   fromJson,
+  mergeColumns,
   parseInstruction,
+  splitColumn,
   parseRecipe,
   profileTable,
   reportToMarkdown,
@@ -731,6 +734,81 @@ describe("run report", () => {
     const md = reportToMarkdown(report, { timestamp: "2026-07-11" });
     expect(md).toContain("# refynr cleaning report");
     expect(md).toContain("Health score:");
+  });
+});
+
+describe("column transforms", () => {
+  const table: Table = {
+    headers: ["Name", "City"],
+    rows: [
+      ["John Smith", "Leeds"],
+      ["Ann", "York"],
+      ["Mary Jane Watson", "Hull"],
+      [null, "Bath"],
+    ],
+  };
+
+  it("splits a column on a separator, sized by the widest row", () => {
+    const t = splitColumn(table, 0, { separator: " " });
+    expect(t.headers).toEqual(["Name 1", "Name 2", "Name 3", "City"]);
+    expect(t.rows[0]).toEqual(["John", "Smith", null, "Leeds"]);
+    expect(t.rows[1]).toEqual(["Ann", null, null, "York"]);
+    expect(t.rows[2]).toEqual(["Mary", "Jane", "Watson", "Hull"]);
+    expect(t.rows[3]).toEqual([null, null, null, "Bath"]);
+    // Non-destructive: the input is untouched.
+    expect(table.headers).toEqual(["Name", "City"]);
+    expect(table.rows[0]![0]).toBe("John Smith");
+  });
+
+  it("honours custom names and returns the table unchanged when nothing splits", () => {
+    const named = splitColumn(table, 0, { separator: " ", names: ["First", "Last"] });
+    expect(named.headers.slice(0, 2)).toEqual(["First", "Last"]);
+    const noop = splitColumn(table, 1, { separator: "|" }); // no pipes in City
+    expect(noop).toBe(table);
+  });
+
+  it("merges columns, skipping empties, and drops the source columns", () => {
+    const split = splitColumn(table, 0, { separator: " " });
+    const back = mergeColumns(split, [0, 1, 2], { name: "Name" });
+    expect(back.headers).toEqual(["Name", "City"]);
+    expect(back.rows[0]![0]).toBe("John Smith");
+    expect(back.rows[1]![0]).toBe("Ann"); // no trailing separators from empties
+    expect(back.rows[3]![0]).toBeNull();
+  });
+
+  it("merge is a no-op for fewer than two valid columns", () => {
+    expect(mergeColumns(table, [0])).toBe(table);
+    expect(mergeColumns(table, [0, 99])).toBe(table);
+  });
+});
+
+describe("findReplace", () => {
+  const table: Table = {
+    headers: ["Name", "City"],
+    rows: [
+      ["Acme Ltd", "Leeds"],
+      ["ACME Corp", "leeds"],
+      ["Beta Inc", "York"],
+    ],
+  };
+
+  it("matches case-insensitively by default and preserves surrounding text", () => {
+    const reps = findReplace(table, "acme", "Apex");
+    expect(reps).toHaveLength(2);
+    expect(reps[0]!.after).toBe("Apex Ltd");
+    expect(reps[1]!.after).toBe("Apex Corp"); // original casing outside the match kept
+  });
+
+  it("honours matchCase, wholeCell and column restriction", () => {
+    expect(findReplace(table, "ACME", "X", { matchCase: true })).toHaveLength(1);
+    expect(findReplace(table, "Leeds", "Bradford", { wholeCell: true, matchCase: true })).toHaveLength(1);
+    expect(findReplace(table, "leeds", "Bradford", { column: 0 })).toHaveLength(0);
+  });
+
+  it("never mutates the table and returns nothing for an empty query", () => {
+    findReplace(table, "Acme", "Zzz");
+    expect(table.rows[0]![0]).toBe("Acme Ltd");
+    expect(findReplace(table, "", "x")).toHaveLength(0);
   });
 });
 

@@ -33,7 +33,14 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
 - **Run report** (`report.ts`): `buildReport` / `reportToMarkdown` — shareable
   audit of what changed, from patch metadata.
 - **NL commands** (`nl.ts`): `parseInstruction` — deterministic, in-browser
-  plain-English → `EngineOptions` (no network).
+  plain-English → `EngineOptions` (no network). **No longer surfaced in the web
+  UI** (replaced by explicit date selects + the findings checkboxes — small,
+  enumerable option space is better served by visible controls). Still exported
+  and tested; reintroduce only for parameterised commands if ever needed.
+- **Column transforms** (`transform.ts`): `splitColumn` / `mergeColumns` — pure
+  shape changes returning a NEW table (can't be cell patches). The web shell
+  applies them as a new base (manual edits baked in, re-analysed) and makes
+  them undoable by snapshotting the base table on the undo stack.
 - **JSON input** (`table.ts`): `fromJson` alongside `fromDelimitedText`.
 - **Parquet input** (web shell only): the cleanse worker reads Parquet via
   `hyparquet` (pure JS, no WASM) → `Table`, capped at 100k rows/session with a

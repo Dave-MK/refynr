@@ -5,7 +5,10 @@ import {
   applyPatches,
   buildReport,
   cleanse,
+  findReplace,
+  mergeColumns,
   reportToMarkdown,
+  splitColumn,
   type CellPatch,
   type CellValue,
   type CleanseResult,
@@ -16,7 +19,7 @@ import {
 } from "@refynr/engine";
 import type {
   CleanseRequest,
-  CleanseResponse,
+  WorkerMessage,
 } from "@/workers/cleanse.worker";
 import { AuthNav } from "@/components/AuthNav";
 import { Landing } from "@/components/Landing";
@@ -67,6 +70,32 @@ export default function Home() {
   const [highlightKeys, setHighlightKeys] = useState<Set<string>>(new Set());
   const [scrollToKey, setScrollToKey] = useState<string | null>(null);
   const [scrollNonce, setScrollNonce] = useState(0);
+  // Live stage line while the worker chews a big file ("Analysing 100,000 rows…").
+  const [progressStage, setProgressStage] = useState<string | null>(null);
+  // Multi-sheet workbooks: names + which one is loaded, and the File so a
+  // different sheet can be re-read on demand.
+  const [sheets, setSheets] = useState<string[]>([]);
+  const [sheetName, setSheetName] = useState<string | null>(null);
+  const xlsxFile = useRef<File | null>(null);
+  // Find & replace state.
+  const [findText, setFindText] = useState("");
+  const [replaceText, setReplaceText] = useState("");
+  const [matchCase, setMatchCase] = useState(false);
+  // Undo: snapshots of the review state — including the base table, so shape
+  // transforms (split/merge) are undoable too — restored by Ctrl+Z or the toast.
+  const undoStack = useRef<
+    {
+      base: { table: Table; result: CleanseResult } | null;
+      baseName: string;
+      disabled: Set<string>;
+      skipRules: Set<string>;
+      options: EngineOptions;
+      manualEdits: Map<string, CellValue>;
+    }[]
+  >([]);
+  const [undoDepth, setUndoDepth] = useState(0);
+  const [toast, setToast] = useState<{ message: string; undoable: boolean } | null>(null);
+  const toastTimer = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const compareInput = useRef<HTMLInputElement>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -77,33 +106,43 @@ export default function Home() {
     const worker = new Worker(
       new URL("../workers/cleanse.worker.ts", import.meta.url),
     );
-    worker.onmessage = (e: MessageEvent<CleanseResponse>) => {
+    worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
+      const msg = e.data;
+      if ("kind" in msg) {
+        setProgressStage(msg.stage);
+        return;
+      }
       setBusy(false);
-      if (!e.data.ok) {
+      setProgressStage(null);
+      if (!msg.ok) {
         setError(
-          e.data.tag === "compare"
-            ? `Couldn't read the comparison file: ${e.data.error}`
-            : `Couldn't read that data: ${e.data.error}`,
+          msg.tag === "compare"
+            ? `Couldn't read the comparison file: ${msg.error}`
+            : `Couldn't read that data: ${msg.error}`,
         );
         return;
       }
-      if (e.data.tag === "compare") {
-        setCompareTable(e.data.table);
+      if (msg.tag === "compare") {
+        setCompareTable(msg.table);
         setCompareName(pendingCompareName.current);
         setError(null);
         return;
       }
-      setBase({ table: e.data.table, result: e.data.result });
+      setBase({ table: msg.table, result: msg.result });
       setBaseName(pendingName.current);
       setManualEdits(new Map());
       setDisabled(new Set());
       setOptions({});
       setSkipRules(new Set());
-      setTruncated(e.data.truncated ?? null);
+      setTruncated(msg.truncated ?? null);
+      setSheets(msg.sheets ?? []);
+      setSheetName(msg.sheetName ?? null);
       setCompareTable(null); // a fresh dataset invalidates any prior comparison
       setCompareName("");
       setHighlightKeys(new Set());
       setScrollToKey(null);
+      undoStack.current = [];
+      setUndoDepth(0);
       setMode("diff");
       setError(null);
     };
@@ -129,6 +168,7 @@ export default function Home() {
     async (file: File) => {
       pendingName.current = file.name;
       if (/\.(xlsx|xls)$/i.test(file.name)) {
+        xlsxFile.current = file; // kept so a different sheet can be loaded later
         const buffer = await file.arrayBuffer();
         submit({ kind: "xlsx", buffer, name: file.name }, [buffer]);
       } else if (/\.parquet$/i.test(file.name)) {
@@ -248,9 +288,146 @@ export default function Home() {
     [working, result, accepted],
   );
 
+  // ── Undo ──────────────────────────────────────────────────────────────────
+  // Every mutating review action pushes a snapshot first; Ctrl+Z (or the
+  // toast's Undo) pops one. State snapshots are simpler and safer than
+  // per-action inverse logic, and the sets/maps involved are small.
+  const snapshot = useCallback(() => {
+    undoStack.current.push({
+      base,
+      baseName,
+      disabled: new Set(disabled),
+      skipRules: new Set(skipRules),
+      options,
+      manualEdits: new Map(manualEdits),
+    });
+    if (undoStack.current.length > 50) undoStack.current.shift();
+    setUndoDepth(undoStack.current.length);
+  }, [base, baseName, disabled, skipRules, options, manualEdits]);
+
+  const undo = useCallback(() => {
+    const prev = undoStack.current.pop();
+    if (!prev) return;
+    setBase(prev.base);
+    setBaseName(prev.baseName);
+    setDisabled(prev.disabled);
+    setSkipRules(prev.skipRules);
+    setOptions(prev.options);
+    setManualEdits(prev.manualEdits);
+    setHighlightKeys(new Set());
+    setScrollToKey(null);
+    setUndoDepth(undoStack.current.length);
+    setToast(null);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z") return;
+      const el = document.activeElement;
+      // Leave native undo alone inside text fields.
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return;
+      e.preventDefault();
+      undo();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo]);
+
+  const showToast = useCallback((message: string, undoable = true) => {
+    setToast({ message, undoable });
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), 6000);
+  }, []);
+
+  // ── Column transforms (split / merge) ─────────────────────────────────────
+  // Shape changes can't be cell patches, so a transform bakes the current
+  // manual edits into a NEW base table (via the pure engine functions) and
+  // re-analyses it. The pre-transform state — table included — sits on the
+  // undo stack, so Ctrl+Z reverses the whole operation.
+  const applyTransform = useCallback(
+    (make: (t: Table) => Table, label: string, noopMessage: string) => {
+      if (!working) return;
+      const next = make(working);
+      if (next === working) {
+        showToast(noopMessage, false);
+        return;
+      }
+      snapshot();
+      setBase({ table: next, result: cleanse(next, options) });
+      setManualEdits(new Map());
+      setHighlightKeys(new Set());
+      setScrollToKey(null);
+      showToast(label);
+    },
+    [working, options, snapshot, showToast],
+  );
+
+  const onSplit = useCallback(
+    (col: number, separator: string) => {
+      const name = base?.table.headers[col] ?? "column";
+      applyTransform(
+        (t) => splitColumn(t, col, { separator }),
+        `Split "${name}"`,
+        `Nothing to split — "${separator || " "}" doesn't appear in "${name}".`,
+      );
+    },
+    [applyTransform, base],
+  );
+
+  const onMerge = useCallback(
+    (cols: number[], separator: string) => {
+      applyTransform(
+        (t) => mergeColumns(t, cols, { separator }),
+        `Merged ${cols.length} columns`,
+        "Pick at least two different columns to merge.",
+      );
+    },
+    [applyTransform],
+  );
+
+  // ── Find & replace ────────────────────────────────────────────────────────
+  // Matches are computed by the engine (pure, non-mutating); replacements are
+  // applied through the manual-edit pipeline, so they're re-scored live,
+  // visible in the Changes view, and undoable like any other edit.
+  const matches = useMemo(
+    () => (working && findText ? findReplace(working, findText, replaceText, { matchCase }) : []),
+    [working, findText, replaceText, matchCase],
+  );
+
+  const replaceAll = useCallback(() => {
+    if (matches.length === 0 || !base) return;
+    snapshot();
+    setManualEdits((prev) => {
+      const next = new Map(prev);
+      for (const m of matches) {
+        const key = `${m.cell.row}:${m.cell.col}`;
+        const original = base.table.rows[m.cell.row]?.[m.cell.col] ?? null;
+        if (m.after === original) next.delete(key);
+        else next.set(key, m.after === "" ? null : m.after);
+      }
+      return next;
+    });
+    showToast(`Replaced ${matches.length} value${matches.length === 1 ? "" : "s"}`);
+    setFindText("");
+    setReplaceText("");
+  }, [matches, base, snapshot, showToast]);
+
+  // ── Multi-sheet workbooks ─────────────────────────────────────────────────
+  const selectSheet = useCallback(
+    async (index: number) => {
+      const file = xlsxFile.current;
+      if (!file) return;
+      pendingName.current = file.name;
+      const buffer = await file.arrayBuffer();
+      submit({ kind: "xlsx", buffer, name: file.name, sheet: index }, [buffer]);
+    },
+    [submit],
+  );
+
   const onEditCell = useCallback(
     (row: number, col: number, value: CellValue) => {
       if (!base) return;
+      snapshot();
       const key = `${row}:${col}`;
       const originalValue = base.table.rows[row]?.[col] ?? null;
       setManualEdits((prev) => {
@@ -261,13 +438,14 @@ export default function Home() {
         return next;
       });
     },
-    [base],
+    [base, snapshot],
   );
 
   const toggleFinding = useCallback(
     (index: number) => {
       const f = result?.findings[index];
       if (!f) return;
+      snapshot();
       const key = findingKey(f);
       setDisabled((prev) => {
         const next = new Set(prev);
@@ -276,21 +454,29 @@ export default function Home() {
         return next;
       });
     },
-    [result],
+    [result, snapshot],
   );
 
   // Apply engine options. Constraints are preserved across a plain-English
   // command (which doesn't set them) so typed rules aren't wiped by a command.
-  const onApplyOptions = useCallback((next: EngineOptions) => {
-    setOptions((prev) => ({ ...next, constraints: next.constraints ?? prev.constraints }));
-  }, []);
+  const onApplyOptions = useCallback(
+    (next: EngineOptions) => {
+      snapshot();
+      setOptions((prev) => ({ ...next, constraints: next.constraints ?? prev.constraints }));
+    },
+    [snapshot],
+  );
 
   // Apply a full recipe: its options plus which fixes to leave un-accepted.
-  const onApplyRecipe = useCallback((recipe: Recipe) => {
-    setOptions(recipe.options);
-    setSkipRules(new Set(recipe.skipRules));
-    setDisabled(new Set()); // recipe defines the accept/skip state
-  }, []);
+  const onApplyRecipe = useCallback(
+    (recipe: Recipe) => {
+      snapshot();
+      setOptions(recipe.options);
+      setSkipRules(new Set(recipe.skipRules));
+      setDisabled(new Set()); // recipe defines the accept/skip state
+    },
+    [snapshot],
+  );
 
   // The rules currently left un-accepted — a recipe's skips plus any finding
   // the user has since un-ticked by hand — so "Save current" captures both.
@@ -341,6 +527,7 @@ export default function Home() {
   const onSetAll = useCallback(
     (accept: boolean) => {
       if (!result) return;
+      snapshot();
       if (accept) {
         setDisabled(new Set());
         setSkipRules(new Set());
@@ -351,8 +538,9 @@ export default function Home() {
         });
         setDisabled(all);
       }
+      showToast(accept ? "Accepted all fixes" : "Cleared all fixes");
     },
-    [result],
+    [result, snapshot, showToast],
   );
 
   // Jump to and highlight the cells a finding refers to.
@@ -511,6 +699,11 @@ export default function Home() {
               {error}
             </p>
           )}
+          {busy && progressStage && (
+            <p className="mt-4 animate-pulse font-mono text-sm text-teal">
+              › {progressStage}
+            </p>
+          )}
         </section>
         </Landing>
       )}
@@ -530,6 +723,35 @@ export default function Home() {
           {error && (
             <p className="rounded-lg border border-coral/25 bg-coral/10 px-4 py-3 text-sm text-coral">
               {error}
+            </p>
+          )}
+
+          {busy && progressStage && (
+            <p className="animate-pulse rounded-lg border border-line bg-card px-4 py-3 font-mono text-sm text-teal">
+              › {progressStage}
+            </p>
+          )}
+
+          {sheets.length > 1 && (
+            <p className="flex flex-wrap items-center gap-2 rounded-lg border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-body">
+              <span>
+                This workbook has{" "}
+                <span className="font-mono font-semibold text-hi">{sheets.length}</span>{" "}
+                sheets — showing{" "}
+                <span className="font-mono font-semibold text-hi">"{sheetName}"</span>.
+              </span>
+              <label className="inline-flex items-center gap-2 font-mono text-[12px] text-mut">
+                Switch:
+                <select
+                  value={sheets.indexOf(sheetName ?? "")}
+                  onChange={(e) => void selectSheet(Number(e.target.value))}
+                  className="rounded-md border border-line bg-inset px-2 py-1 text-[12px] text-body outline-none focus:border-teal/60"
+                >
+                  {sheets.map((s, i) => (
+                    <option key={s} value={i}>{s}</option>
+                  ))}
+                </select>
+              </label>
             </p>
           )}
 
@@ -553,6 +775,8 @@ export default function Home() {
             columns={base.table.headers}
             onApplyOptions={onApplyOptions}
             onApplyRecipe={onApplyRecipe}
+            onSplit={onSplit}
+            onMerge={onMerge}
           />
 
           <AnalysisPanel
@@ -568,6 +792,7 @@ export default function Home() {
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
             <div className="inline-flex rounded-xl border border-line bg-inset p-1">
               {(
                 [
@@ -588,6 +813,16 @@ export default function Home() {
                   {label}
                 </button>
               ))}
+            </div>
+            {undoDepth > 0 && (
+              <button
+                onClick={undo}
+                title="Undo last review action (Ctrl+Z)"
+                className="rounded-lg border border-line2 bg-card2 px-3 py-1.5 font-mono text-[11px] text-mut transition hover:text-body"
+              >
+                ↶ undo
+              </button>
+            )}
             </div>
             <div className="flex gap-2.5">
               <button
@@ -637,6 +872,45 @@ export default function Home() {
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-card2 px-4 py-3">
+            <span className="label text-teal!">Find &amp; replace</span>
+            <input
+              value={findText}
+              onChange={(e) => setFindText(e.target.value)}
+              placeholder="Find…"
+              className="min-w-[130px] flex-1 rounded-lg border border-line bg-inset px-3 py-1.5 text-[13px] text-body outline-none placeholder:text-dim focus:border-teal/60"
+            />
+            <span className="text-dim" aria-hidden>→</span>
+            <input
+              value={replaceText}
+              onChange={(e) => setReplaceText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && replaceAll()}
+              placeholder="Replace with…"
+              className="min-w-[130px] flex-1 rounded-lg border border-line bg-inset px-3 py-1.5 text-[13px] text-body outline-none placeholder:text-dim focus:border-teal/60"
+            />
+            <label className="inline-flex cursor-pointer items-center gap-1.5 font-mono text-[11px] text-mut">
+              <input
+                type="checkbox"
+                checked={matchCase}
+                onChange={(e) => setMatchCase(e.target.checked)}
+                className="h-3.5 w-3.5 accent-teal"
+              />
+              match case
+            </label>
+            {findText && (
+              <span className="font-mono text-[11px] tabular-nums text-mut">
+                {matches.length} match{matches.length === 1 ? "" : "es"}
+              </span>
+            )}
+            <button
+              onClick={replaceAll}
+              disabled={matches.length === 0}
+              className="rounded-lg border border-line2 bg-card px-3 py-1.5 font-mono text-[11px] font-semibold text-body transition hover:border-mut disabled:opacity-40"
+            >
+              Replace all
+            </button>
+          </div>
+
           {compareTable && (
             <DatasetDiff
               before={base.table}
@@ -671,6 +945,29 @@ export default function Home() {
               : "Amber cells in Changes are advisory — edit them to fix by hand and watch the score update. "}
             Your original data is never modified — refynr only ever exports a copy.
           </p>
+        </div>
+      )}
+
+      {toast && (
+        <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2">
+          <div className="flex items-center gap-4 rounded-xl border border-line2 bg-card px-5 py-3 shadow-[0_8px_30px_rgba(0,0,0,0.4)]">
+            <span className="text-sm text-hi">{toast.message}</span>
+            {toast.undoable && (
+              <button
+                onClick={undo}
+                className="rounded-md bg-teal/15 px-3 py-1 font-mono text-[11px] font-semibold text-teal transition hover:bg-teal/25"
+              >
+                Undo
+              </button>
+            )}
+            <button
+              onClick={() => setToast(null)}
+              aria-label="Dismiss"
+              className="font-mono text-[11px] text-dim transition hover:text-body"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
     </main>

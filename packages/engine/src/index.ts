@@ -22,7 +22,16 @@ import { checkConstraints } from "./expectations.js";
 export * from "./types.js";
 export { profileTable } from "./profile.js";
 export { scoreTable } from "./score.js";
-export { applyPatches, fromDelimitedText, fromJson, cellText, isEmptyCell } from "./table.js";
+export {
+  applyPatches,
+  fromDelimitedText,
+  fromJson,
+  findReplace,
+  cellText,
+  isEmptyCell,
+  type FindReplaceOptions,
+  type Replacement,
+} from "./table.js";
 export { checkConstraints } from "./expectations.js";
 export {
   diffTables,
@@ -48,6 +57,12 @@ export {
   type RecipeRun,
 } from "./recipe.js";
 export { parseInstruction, type Instruction } from "./nl.js";
+export {
+  splitColumn,
+  mergeColumns,
+  type SplitOptions,
+  type MergeOptions,
+} from "./transform.js";
 
 const DEFAULT_OPTIONS: Required<EngineOptions> = {
   dateOrder: "auto",

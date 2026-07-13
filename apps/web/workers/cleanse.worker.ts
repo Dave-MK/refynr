@@ -16,8 +16,15 @@ type Tag = "main" | "compare";
 export type CleanseRequest =
   | { kind: "text"; text: string; tag?: Tag }
   | { kind: "json"; text: string; tag?: Tag }
-  | { kind: "xlsx"; buffer: ArrayBuffer; name: string; tag?: Tag }
+  | { kind: "xlsx"; buffer: ArrayBuffer; name: string; tag?: Tag; sheet?: number }
   | { kind: "parquet"; buffer: ArrayBuffer; name: string; tag?: Tag };
+
+/** Streamed while a big file loads, so the UI can show live progress
+ *  ("Analysing 100,000 rows…") instead of a frozen button label. */
+export interface ProgressMessage {
+  kind: "progress";
+  stage: string;
+}
 
 export type CleanseResponse =
   | {
@@ -26,20 +33,31 @@ export type CleanseResponse =
       table: Table;
       result: CleanseResult;
       sheetName?: string;
+      /** All sheet names in the workbook (XLSX only) so the UI can offer a picker. */
+      sheets?: string[];
       /** Set when the source had more rows than we loaded this session. */
       truncated?: { shown: number; total: number };
     }
   | { ok: true; tag: "compare"; table: Table }
   | { ok: false; tag: Tag; error: string };
 
+export type WorkerMessage = CleanseResponse | ProgressMessage;
+
+const progress = (stage: string) =>
+  postMessage({ kind: "progress", stage } satisfies ProgressMessage);
+
 /** Interactive session cap. Everything up to this is cleaned and exported in
  *  full; beyond it the file is loaded as a (disclosed) preview so the browser
  *  stays responsive. Raising this is a memory/time trade-off, not a code one. */
 const PARQUET_ROW_CAP = 100_000;
 
-function tableFromWorkbook(buffer: ArrayBuffer): { table: Table; sheetName: string } {
+function tableFromWorkbook(
+  buffer: ArrayBuffer,
+  sheet = 0,
+): { table: Table; sheetName: string; sheets: string[] } {
   const wb = XLSX.read(buffer, { type: "array" });
-  const sheetName = wb.SheetNames[0];
+  const sheets = wb.SheetNames;
+  const sheetName = sheets[Math.min(Math.max(sheet, 0), sheets.length - 1)];
   if (!sheetName) throw new Error("The workbook has no sheets.");
   const ws = wb.Sheets[sheetName]!;
 
@@ -66,7 +84,7 @@ function tableFromWorkbook(buffer: ArrayBuffer): { table: Table; sheetName: stri
     return row;
   });
 
-  return { table: { headers, rows }, sheetName };
+  return { table: { headers, rows }, sheetName, sheets };
 }
 
 /** Coerce a Parquet value (which may be a BigInt, Date, or nested object) into
@@ -124,6 +142,7 @@ self.onmessage = async (e: MessageEvent<CleanseRequest>) => {
   try {
     let table: Table;
     let sheetName: string | undefined;
+    let sheets: string[] | undefined;
     let truncated: { shown: number; total: number } | undefined;
 
     if (e.data.kind === "text") {
@@ -131,13 +150,16 @@ self.onmessage = async (e: MessageEvent<CleanseRequest>) => {
     } else if (e.data.kind === "json") {
       table = fromJson(e.data.text);
     } else if (e.data.kind === "parquet") {
+      progress("Reading Parquet file…");
       const parsed = await tableFromParquet(e.data.buffer);
       table = parsed.table;
       truncated = parsed.truncated;
     } else {
-      const parsed = tableFromWorkbook(e.data.buffer);
+      progress("Reading workbook…");
+      const parsed = tableFromWorkbook(e.data.buffer, e.data.sheet ?? 0);
       table = parsed.table;
       sheetName = parsed.sheetName;
+      sheets = parsed.sheets;
     }
 
     if (table.rows.length === 0) {
@@ -151,8 +173,17 @@ self.onmessage = async (e: MessageEvent<CleanseRequest>) => {
       return;
     }
 
+    progress(`Analysing ${table.rows.length.toLocaleString("en-GB")} rows…`);
     const result = cleanse(table);
-    postMessage({ ok: true, tag: "main", table, result, sheetName, truncated } satisfies CleanseResponse);
+    postMessage({
+      ok: true,
+      tag: "main",
+      table,
+      result,
+      sheetName,
+      sheets,
+      truncated,
+    } satisfies CleanseResponse);
   } catch (err) {
     postMessage({
       ok: false,

@@ -1,4 +1,4 @@
-import type { CellValue, Patch, Table } from "./types.js";
+import type { CellRef, CellValue, Patch, Table } from "./types.js";
 
 /** Cell value as a trimmed-of-nothing display string ("" for null). */
 export function cellText(v: CellValue): string {
@@ -73,6 +73,78 @@ export function fromDelimitedText(text: string): Table {
   );
 
   return { headers, rows: grid.slice(1).map(pad) };
+}
+
+export interface FindReplaceOptions {
+  /** Case-sensitive matching (default false). */
+  matchCase?: boolean;
+  /** Only match when the whole cell equals the query (default false: substring). */
+  wholeCell?: boolean;
+  /** Restrict to one column index. */
+  column?: number;
+}
+
+export interface Replacement {
+  cell: CellRef;
+  before: CellValue;
+  after: string;
+}
+
+/**
+ * Find-and-replace as data, not mutation: returns the list of cell
+ * replacements a query would make, leaving the table untouched. The shell
+ * applies them through its existing edit pipeline so every replacement is
+ * previewable, revertible, and re-scored — never a blind global mutate.
+ * Plain-text matching only (no regex): predictable for non-technical users.
+ */
+export function findReplace(
+  table: Table,
+  find: string,
+  replace: string,
+  options: FindReplaceOptions = {},
+): Replacement[] {
+  if (find === "") return [];
+  const { matchCase = false, wholeCell = false, column } = options;
+  const needle = matchCase ? find : find.toLowerCase();
+  const out: Replacement[] = [];
+
+  table.rows.forEach((row, r) => {
+    row.forEach((v, c) => {
+      if (column !== undefined && c !== column) return;
+      const text = cellText(v);
+      if (text === "") return;
+      const hay = matchCase ? text : text.toLowerCase();
+
+      let after: string | null = null;
+      if (wholeCell) {
+        if (hay === needle) after = replace;
+      } else if (hay.includes(needle)) {
+        if (matchCase) {
+          after = text.split(find).join(replace);
+        } else {
+          // Case-insensitive substring replace that preserves surrounding text.
+          let result = "";
+          let i = 0;
+          while (i < text.length) {
+            const at = hay.indexOf(needle, i);
+            if (at === -1) {
+              result += text.slice(i);
+              break;
+            }
+            result += text.slice(i, at) + replace;
+            i = at + find.length;
+          }
+          after = result;
+        }
+      }
+
+      if (after !== null && after !== text) {
+        out.push({ cell: { row: r, col: c }, before: v, after });
+      }
+    });
+  });
+
+  return out;
 }
 
 /**
