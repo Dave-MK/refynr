@@ -1,80 +1,103 @@
-# refynr
+# refynr.
 
-Non-destructive spreadsheet quality and repair. Paste data or upload a CSV, get a
-data health score, explained findings, and a before/after diff of every proposed
-fix — nothing changes until you accept it, and your data never leaves the browser.
+**Clean messy spreadsheets in your browser — with every change explained, reviewable, and undoable.**
 
-## Architecture
+Paste data or drop a CSV/Excel/JSON/Parquet file. refynr profiles it, scores its
+health, and proposes fixes as individual patches — trimmed whitespace, merged
+duplicates, normalised dates, standardised spellings, validated UK postcodes and
+VAT numbers. Nothing changes until you accept it, and you can accept fixes one
+by one, un-tick the ones you don't want, and rewind any step. Your data never
+leaves your device: parsing, analysis, and cleaning all run client-side.
 
-One engine, many shells. All cleansing logic lives in a pure TypeScript package
-with no DOM or framework dependencies, so the same core powers the web app today
-and the browser extension, Excel/Sheets add-ins, and API later.
+## Why refynr
 
-```
-packages/engine   @refynr/engine — profiling, findings, patches, health score
-apps/web          @refynr/web — Next.js app (paste/upload → score → diff → export)
-                  + POST /api/clean (developer API) + POST /api/insights (AI layer)
-apps/extension    @refynr/extension — Chrome side panel (WXT): paste → review → copy back
-```
+Most cleaning tools make you choose between power and trust:
 
-Core principles:
+- **Spreadsheet AI assistants** (Excel Copilot, Sheets cleanup) are one-click
+  but narrow, probabilistic, and often behind a licence.
+- **Prep tools** (OpenRefine, Power Query) are powerful but edit in place, live
+  on the desktop, or need a data team to drive them.
+- **Cloud services** want your data uploaded first.
 
-- **Everything is a patch, nothing is a mutation.** The engine emits
-  `Patch` objects (before, after, rule, reason, confidence); the cleaned table
-  is always `original + accepted patches`. Diff view, per-cell "why did this
-  change?", selective apply, and audit trail all fall out of this model.
-- **Deterministic rules first, AI second.** Regexes, parsers, and statistics do
-  the detection and fixing — instant, free, reproducible, private. AI insight
-  (planned) receives only column profiles, never raw data.
-- **Client-side processing.** Parsing and cleansing run in the browser.
+refynr's bet: **deterministic rules + human review beats AI guessing** for data
+you have to stand behind. Every fix is a regex, parser, or statistic — same
+input, same output, every time — with a plain-English reason attached. The
+state of the art in probabilistic repair gets ~90% precision; that's 1 in 10
+automated changes wrong. refynr never guesses: what can't be fixed with
+confidence is flagged for you instead.
 
-## Current rules
+## What it does
 
-whitespace/invisible characters · exact + near duplicate rows · blank rows ·
-inconsistent casing · mixed date formats (with day/month order inference) ·
-email normalization/validation · UK phone normalization · UK postcode
-normalization/validation · missing-value analysis
+**Fixes (as reviewable patches)** — whitespace and invisible characters ·
+mojibake/encoding repair · header hygiene · exact and key-column duplicates ·
+inconsistent casing · variant spellings ("Acme Ltd." vs "Acme Ltd") · date
+formats (with day/month order inference) · numbers stored as text · boolean
+variants · email, UK phone, and UK postcode normalisation · UK VAT, sort code,
+and company-number validation (with checksums)
 
-## Development
+**Flags (advisory, never auto-fixed)** — invalid emails/dates · fuzzy
+near-duplicate rows · statistical outliers · Excel-stripped leading zeros ·
+cross-column inconsistencies (the one row where a postcode maps to a different
+city) · personal data present (UK GDPR reminder before you share the export)
+
+**Beyond fixes** — deterministic 0–100 health score (current + projected) ·
+per-column profiling · pass/fail expectations (not-null/unique/regex/range/
+allowed-values) with rules auto-suggested from the data · column split, merge,
+and unpivot · find & replace · dataset diff ("what changed since last
+export?") · shareable Markdown audit report · saved cleaning recipes (config
+only, no cell data) that replay on next month's export
+
+## Try it
 
 ```sh
 pnpm install
-pnpm build          # build all packages (turbo)
-pnpm test           # engine unit tests
-pnpm --filter @refynr/web dev         # web app on :3000
-pnpm --filter @refynr/extension dev   # extension dev mode (opens Chrome)
-pnpm --filter @refynr/extension zip   # package for Chrome Web Store
+pnpm build
+pnpm --filter @refynr/web dev   # → http://localhost:3000
 ```
 
-**AI insights** need a key: copy `apps/web/.env.example` to `apps/web/.env.local`
-and set `ANTHROPIC_API_KEY`. Everything else works without it. The endpoint
-sends only column profiles (names, types, stats, a few sample values) and
-finding summaries to Claude — never the dataset.
+Paste anything tabular, or click "try sample data".
 
-**Developer API:** `POST /api/clean` with `{headers, rows, options?, apply?}`
-returns `{health_score, projected_score, findings, patches, cleaned_data?}`.
+## Monorepo
 
-**Extension:** `pnpm --filter @refynr/extension build`, then load
-`apps/extension/.output/chrome-mv3` via chrome://extensions → Load unpacked.
-Flow: copy cells in Sheets/Excel Online → paste in the side panel → review →
-"Copy cleaned data" → paste back. See [apps/extension/README.md](apps/extension/README.md).
+```
+packages/engine     @refynr/engine — pure TS, zero deps: profiling, fixers,
+                    patches, scoring, recipes, diff, constraints, transforms
+packages/cli        @refynr/cli — headless clean/diff for CI (--min-score gate)
+packages/refynr-py  Python wrapper (subprocess → CLI) for notebooks
+apps/web            @refynr/web — Next.js shell: the product
+apps/extension      @refynr/extension — Chrome side panel (WXT)
+```
 
-**Engine internals:** see [packages/engine/README.md](packages/engine/README.md)
-for the patch model, rule list, and options. Contributor conventions live in
-[CLAUDE.md](CLAUDE.md).
+One engine, many shells: all cleaning logic lives in `@refynr/engine`
+(no DOM, no Node APIs, no dependencies). Shells only render results.
 
-## Before deploying publicly
+```sh
+pnpm test                             # engine unit tests (vitest)
+pnpm typecheck                        # all packages
+node packages/cli/dist/cli.js --help  # CLI: clean + diff, CI gates
+```
 
-- `/api/clean` and `/api/insights` are **unauthenticated**. Insights spends
-  Anthropic API credits per call — add rate limiting (e.g. Vercel WAF /
-  Upstash) or auth before exposing them.
-- Input caps exist (`/api/clean` 500k cells; insights prompt is bounded) but
-  there is no per-IP throttling yet.
-- Don't run `pnpm build` while the dev server is running — they share `.next`.
+## CI / automation
 
-## Roadmap
+```sh
+refynr clean data.csv --recipe monthly.json --min-score 90 --report report.md
+refynr diff before.csv after.csv --key "Customer ID" --fail-on-change
+```
 
-1. Glide Data Grid for 100k+ row rendering (current HTML grid caps display at 300 rows)
-2. Excel add-in (Office.js taskpane) + Google Workspace add-on (Apps Script)
-3. Per-user preference memory (date format, casing style, leading-zero IDs)
-4. Auth + billing (Supabase + Stripe) and hosted deployment
+The CLI reads CSV/TSV/JSON/Parquet and exits non-zero when the score gate or
+diff gate fails — same deterministic engine, so CI and browser always agree.
+
+## Deployment notes
+
+- Cleaning needs no account and no server — it's all client-side.
+- Optional Supabase (auth + shared recipe library + AI-insight metering):
+  set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+  `SUPABASE_SERVICE_ROLE_KEY`, and run the migrations in
+  `apps/web/supabase/migrations/`. Without them the app runs fully offline.
+- AI insights are currently disabled by default (`REFYNR_INSIGHTS_ENABLED=1`
+  + `ANTHROPIC_API_KEY` to enable). When enabled, only column profiles and
+  finding summaries leave the browser — never rows, and the UI discloses this.
+- `POST /api/clean` (developer API) is off unless `REFYNR_API_KEY` is set.
+
+Engine internals: [packages/engine/README.md](packages/engine/README.md).
+Contributor conventions: [CLAUDE.md](CLAUDE.md).

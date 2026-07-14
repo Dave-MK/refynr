@@ -1,10 +1,42 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
+
+const description =
+  "Clean messy spreadsheets in your browser. A data health score, explained fixes you accept one by one, and a full audit trail — your data never leaves your device.";
+
 export const metadata: Metadata = {
-  title: "refynr — spreadsheet quality, refined",
-  description:
-    "Upload any spreadsheet. Get a data health score, AI-driven recommendations, and a safe, non-destructive repair preview in under a minute.",
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: "refynr — spreadsheet quality, refined",
+    template: "%s · refynr",
+  },
+  description,
+  keywords: [
+    "data cleaning",
+    "spreadsheet cleaner",
+    "CSV cleaner",
+    "data quality",
+    "deduplicate",
+    "UK postcode validation",
+    "privacy-first",
+  ],
+  openGraph: {
+    title: "refynr — spreadsheet quality, refined",
+    description,
+    url: siteUrl,
+    siteName: "refynr",
+    type: "website",
+    locale: "en_GB",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "refynr — spreadsheet quality, refined",
+    description,
+  },
 };
 
 export default function RootLayout({
