@@ -20,6 +20,8 @@ const RULE_DIMENSION: Record<string, DimensionKey> = {
   "impossible-date": "validity",
   "trim-whitespace": "consistency",
   "consistent-casing": "consistency",
+  "standardise-values": "consistency",
+  "inconsistent-mapping": "validity",
   "normalize-email": "consistency",
   "normalize-postcode": "consistency",
   "normalize-vat": "consistency",

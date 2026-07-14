@@ -27,6 +27,13 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
 - **Expectations** (`expectations.ts`): `checkConstraints` — user-defined
   pass/fail rules (`Constraint`: not-null/unique/regex/range/allowed-values),
   threaded via `EngineOptions.constraints`. Advisory only (never auto-fix).
+  `suggestConstraints(table, profile, existing)` mines candidate rules that
+  already hold (unique/not-null for id-ish columns, allowed-values for small
+  categorical sets, ≤5 suggestions) — the web shell offers them as one-click
+  chips under the expectations editor.
+- **Key-column dedupe** (`EngineOptions.dedupeKey`): column indices that
+  define "duplicate" — rows matching on just those columns are removal
+  patches; empty = whole-row. UI is the "duplicates match on" chip row.
 - **Dataset diff** (`diff.ts`): `diffTables(before, after, key?)` — value-level
   added/removed/changed/unchanged, key inferred or given. The "what changed
   since last export?" wedge.
@@ -37,10 +44,13 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
   UI** (replaced by explicit date selects + the findings checkboxes — small,
   enumerable option space is better served by visible controls). Still exported
   and tested; reintroduce only for parameterised commands if ever needed.
-- **Column transforms** (`transform.ts`): `splitColumn` / `mergeColumns` — pure
+- **Column transforms** (`transform.ts`): `splitColumn` / `mergeColumns` /
+  `unpivot` (wide→long: fold chosen columns into Field/Value rows) — pure
   shape changes returning a NEW table (can't be cell patches). The web shell
   applies them as a new base (manual edits baked in, re-analysed) and makes
-  them undoable by snapshotting the base table on the undo stack.
+  them undoable by snapshotting the base table on the undo stack. Undo
+  snapshots carry a human label; the toolbar's "history · N" panel lists them
+  (Power Query applied-steps style) with per-step rewind.
 - **JSON input** (`table.ts`): `fromJson` alongside `fromDelimitedText`.
 - **Parquet input** (web shell only): the cleanse worker reads Parquet via
   `hyparquet` (pure JS, no WASM) → `Table`, capped at 100k rows/session with a

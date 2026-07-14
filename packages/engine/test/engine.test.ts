@@ -11,6 +11,8 @@ import {
   mergeColumns,
   parseInstruction,
   splitColumn,
+  suggestConstraints,
+  unpivot,
   parseRecipe,
   profileTable,
   reportToMarkdown,
@@ -499,6 +501,212 @@ describe("near-duplicate clustering", () => {
     };
     const finding = cleanse(table).findings.find((f) => f.rule === "near-duplicate-rows");
     expect(finding).toBeUndefined();
+  });
+
+  it("catches a typo in the first character (reversed sorted-neighbourhood pass)", () => {
+    const table: Table = {
+      headers: ["Company"],
+      rows: [
+        ["Acme Trading Limited"],
+        ["Bcme Trading Limited"], // first-letter typo
+        ["Delta Freight Services"],
+        ["Echo Consulting Group"],
+        ["Foxtrot Engineering"],
+      ],
+    };
+    const finding = cleanse(table).findings.find((f) => f.rule === "near-duplicate-rows");
+    expect(finding).toBeDefined();
+  });
+});
+
+describe("value standardisation", () => {
+  it("standardises punctuation variants to the most frequent spelling", () => {
+    const table: Table = {
+      headers: ["Company"],
+      rows: [["Acme Ltd"], ["Acme Ltd"], ["Acme Ltd."]],
+    };
+    const result = cleanse(table);
+    const finding = result.findings.find((f) => f.rule === "standardise-values");
+    expect(finding).toBeDefined();
+    const patch = result.patches.find(
+      (p) => p.kind === "cell" && p.rule === "standardise-values",
+    ) as CellPatch;
+    expect(patch.before).toBe("Acme Ltd.");
+    expect(patch.after).toBe("Acme Ltd");
+  });
+
+  it("standardises word-order variants", () => {
+    const table: Table = {
+      headers: ["Contact"],
+      rows: [["Smith, John"], ["John Smith"], ["John Smith"]],
+    };
+    const result = cleanse(table);
+    const patch = result.patches.find(
+      (p) => p.kind === "cell" && p.rule === "standardise-values",
+    ) as CellPatch;
+    expect(patch).toBeDefined();
+    expect(patch.before).toBe("Smith, John");
+    expect(patch.after).toBe("John Smith");
+  });
+
+  it("leaves case-only variants to the casing fixer", () => {
+    const table: Table = {
+      headers: ["Company"],
+      rows: [["ACME LTD"], ["acme ltd"], ["Acme Ltd"]],
+    };
+    const findings = cleanse(table).findings;
+    expect(findings.find((f) => f.rule === "standardise-values")).toBeUndefined();
+    expect(findings.find((f) => f.rule === "consistent-casing")).toBeDefined();
+  });
+
+  it("skips free-text columns with many distinct values", () => {
+    const rows = Array.from({ length: 1200 }, (_, i) => [
+      `Unique note number ${i} about something`,
+    ]);
+    rows.push(["Acme Ltd"], ["Acme Ltd."]);
+    const table: Table = { headers: ["Notes"], rows };
+    const finding = cleanse(table).findings.find((f) => f.rule === "standardise-values");
+    expect(finding).toBeUndefined();
+  });
+});
+
+describe("cross-column dependency check", () => {
+  const dependent = (): Table => {
+    const rows: (string | null)[][] = [];
+    const mapping: Array<[string, string]> = [
+      ["LS1 4DY", "Leeds"],
+      ["M1 1AE", "Manchester"],
+      ["B1 1BB", "Birmingham"],
+      ["LS2 8JS", "Leeds"],
+    ];
+    for (const [postcode, city] of mapping) {
+      for (let i = 0; i < 6; i++) rows.push([postcode, city]);
+    }
+    return { headers: ["Postcode", "City"], rows };
+  };
+
+  it("flags the minority value when one column almost determines another", () => {
+    const table = dependent();
+    table.rows[3]![1] = "Leds"; // one typo against 5 agreeing rows
+    const finding = cleanse(table).findings.find((f) => f.rule === "inconsistent-mapping");
+    expect(finding).toBeDefined();
+    expect(finding!.count).toBe(1);
+    expect(finding!.patchIds).toEqual([]); // advisory, never auto-fixed
+    expect(finding!.detail).toContain("Leds");
+    expect(finding!.detail).toContain("Leeds");
+  });
+
+  it("stays quiet when the mapping is clean", () => {
+    const finding = cleanse(dependent()).findings.find(
+      (f) => f.rule === "inconsistent-mapping",
+    );
+    expect(finding).toBeUndefined();
+  });
+
+  it("stays quiet when columns are unrelated", () => {
+    const rows: string[][] = [];
+    for (let i = 0; i < 40; i++) {
+      rows.push([`Group ${i % 5}`, `Batch ${(i * 7) % 8}`]);
+    }
+    const table: Table = { headers: ["Group", "Batch"], rows };
+    const finding = cleanse(table).findings.find((f) => f.rule === "inconsistent-mapping");
+    expect(finding).toBeUndefined();
+  });
+});
+
+describe("key-column duplicate detection", () => {
+  const table: Table = {
+    headers: ["Name", "Email", "Notes"],
+    rows: [
+      ["John Smith", "john@acme.com", "first"],
+      ["J. Smith", "john@acme.com", "second"], // same email, different name
+      ["Jane Doe", "jane@acme.com", "third"],
+      ["No Email", "", "fourth"],
+      ["Also None", "", "fifth"], // blank keys must never match each other
+    ],
+  };
+
+  it("deduplicates on the chosen key columns only", () => {
+    const result = cleanse(table, { dedupeKey: [1] });
+    const removals = result.patches.filter((p) => p.kind === "remove-row");
+    expect(removals).toHaveLength(1);
+    expect(removals[0]!.kind === "remove-row" && removals[0]!.row).toBe(1);
+    expect(removals[0]!.reason).toContain('"Email"');
+  });
+
+  it("falls back to whole-row matching when no key is set", () => {
+    const result = cleanse(table);
+    expect(result.patches.filter((p) => p.kind === "remove-row")).toHaveLength(0);
+  });
+});
+
+describe("unpivot (wide to long)", () => {
+  const wide: Table = {
+    headers: ["Name", "Jan", "Feb", "Mar"],
+    rows: [
+      ["Ann", 10, 20, null],
+      ["Bob", 5, null, 7],
+    ],
+  };
+
+  it("folds value columns into Field/Value rows", () => {
+    const long = unpivot(wide, [1, 2, 3]);
+    expect(long.headers).toEqual(["Name", "Field", "Value"]);
+    expect(long.rows).toHaveLength(6); // 2 rows × 3 folded columns
+    expect(long.rows[0]).toEqual(["Ann", "Jan", 10]);
+    expect(long.rows[2]).toEqual(["Ann", "Mar", null]);
+    expect(long.rows[5]).toEqual(["Bob", "Mar", 7]);
+  });
+
+  it("is a no-op for fewer than two value columns or no id columns", () => {
+    expect(unpivot(wide, [1])).toBe(wide);
+    expect(unpivot(wide, [0, 1, 2, 3])).toBe(wide);
+  });
+});
+
+describe("constraint suggestions", () => {
+  const table: Table = {
+    headers: ["Customer ID", "Status", "Notes"],
+    rows: Array.from({ length: 12 }, (_, i) => [
+      `C-${100 + i}`,
+      i % 2 === 0 ? "Active" : "Archived",
+      `note ${i}`,
+    ]),
+  };
+
+  it("suggests unique/not-null for id-ish columns and allowed-values for small sets", () => {
+    const suggestions = suggestConstraints(table, profileTable(table));
+    const kinds = suggestions.map((s) => `${s.column}:${s.type}`);
+    expect(kinds).toContain("Customer ID:unique");
+    expect(kinds).toContain("Customer ID:not-null");
+    const allowed = suggestions.find((s) => s.type === "allowed-values");
+    expect(allowed?.column).toBe("Status");
+    expect(allowed?.values).toEqual(["Active", "Archived"]);
+  });
+
+  it("never re-suggests an existing constraint", () => {
+    const existing = suggestConstraints(table, profileTable(table));
+    expect(suggestConstraints(table, profileTable(table), existing)).toEqual([]);
+  });
+});
+
+describe("personal-data notice", () => {
+  it("names PII columns without touching the score", () => {
+    const table: Table = {
+      headers: ["Email", "NI Number", "Widgets"],
+      rows: Array.from({ length: 6 }, (_, i) => [
+        `user${i}@ex.co.uk`,
+        `QQ 12 34 5${i} C`,
+        i,
+      ]),
+    };
+    const result = cleanse(table);
+    const finding = result.findings.find((f) => f.rule === "pii-present");
+    expect(finding).toBeDefined();
+    expect(finding!.severity).toBe("info");
+    expect(finding!.detail).toContain('"Email"');
+    expect(finding!.detail).toContain("National Insurance");
+    expect(finding!.patchIds).toEqual([]);
   });
 });
 

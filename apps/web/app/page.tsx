@@ -9,6 +9,8 @@ import {
   mergeColumns,
   reportToMarkdown,
   splitColumn,
+  suggestConstraints,
+  unpivot,
   type CellPatch,
   type CellValue,
   type CleanseResult,
@@ -82,9 +84,11 @@ export default function Home() {
   const [replaceText, setReplaceText] = useState("");
   const [matchCase, setMatchCase] = useState(false);
   // Undo: snapshots of the review state — including the base table, so shape
-  // transforms (split/merge) are undoable too — restored by Ctrl+Z or the toast.
+  // transforms (split/merge/unpivot) are undoable too — restored by Ctrl+Z,
+  // the toast, or the visible history list (Power Query's applied-steps idea).
   const undoStack = useRef<
     {
+      label: string;
       base: { table: Table; result: CleanseResult } | null;
       baseName: string;
       disabled: Set<string>;
@@ -94,6 +98,7 @@ export default function Home() {
     }[]
   >([]);
   const [undoDepth, setUndoDepth] = useState(0);
+  const [showHistory, setShowHistory] = useState(false);
   const [toast, setToast] = useState<{ message: string; undoable: boolean } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -214,7 +219,8 @@ export default function Home() {
     options.dateOrder ||
     options.dateOutput ||
     options.disabledRules?.length ||
-    options.constraints?.length
+    options.constraints?.length ||
+    options.dedupeKey?.length
   );
 
   // Re-cleanse on the main thread once the user has made manual edits or set
@@ -292,22 +298,24 @@ export default function Home() {
   // Every mutating review action pushes a snapshot first; Ctrl+Z (or the
   // toast's Undo) pops one. State snapshots are simpler and safer than
   // per-action inverse logic, and the sets/maps involved are small.
-  const snapshot = useCallback(() => {
-    undoStack.current.push({
-      base,
-      baseName,
-      disabled: new Set(disabled),
-      skipRules: new Set(skipRules),
-      options,
-      manualEdits: new Map(manualEdits),
-    });
-    if (undoStack.current.length > 50) undoStack.current.shift();
-    setUndoDepth(undoStack.current.length);
-  }, [base, baseName, disabled, skipRules, options, manualEdits]);
+  const snapshot = useCallback(
+    (label: string) => {
+      undoStack.current.push({
+        label,
+        base,
+        baseName,
+        disabled: new Set(disabled),
+        skipRules: new Set(skipRules),
+        options,
+        manualEdits: new Map(manualEdits),
+      });
+      if (undoStack.current.length > 50) undoStack.current.shift();
+      setUndoDepth(undoStack.current.length);
+    },
+    [base, baseName, disabled, skipRules, options, manualEdits],
+  );
 
-  const undo = useCallback(() => {
-    const prev = undoStack.current.pop();
-    if (!prev) return;
+  const restore = useCallback((prev: (typeof undoStack.current)[number]) => {
     setBase(prev.base);
     setBaseName(prev.baseName);
     setDisabled(prev.disabled);
@@ -319,6 +327,24 @@ export default function Home() {
     setUndoDepth(undoStack.current.length);
     setToast(null);
   }, []);
+
+  const undo = useCallback(() => {
+    const prev = undoStack.current.pop();
+    if (!prev) return;
+    restore(prev);
+  }, [restore]);
+
+  // Rewind to the state BEFORE the history entry at `index` — i.e. undo that
+  // action and everything after it, in one click from the history list.
+  const undoTo = useCallback(
+    (index: number) => {
+      const target = undoStack.current[index];
+      if (!target) return;
+      undoStack.current = undoStack.current.slice(0, index);
+      restore(target);
+    },
+    [restore],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -352,7 +378,7 @@ export default function Home() {
         showToast(noopMessage, false);
         return;
       }
-      snapshot();
+      snapshot(label);
       setBase({ table: next, result: cleanse(next, options) });
       setManualEdits(new Map());
       setHighlightKeys(new Set());
@@ -385,6 +411,17 @@ export default function Home() {
     [applyTransform],
   );
 
+  const onUnpivot = useCallback(
+    (cols: number[]) => {
+      applyTransform(
+        (t) => unpivot(t, cols),
+        `Unpivoted ${cols.length} columns`,
+        "Pick at least two columns to fold, leaving at least one as the identifier.",
+      );
+    },
+    [applyTransform],
+  );
+
   // ── Find & replace ────────────────────────────────────────────────────────
   // Matches are computed by the engine (pure, non-mutating); replacements are
   // applied through the manual-edit pipeline, so they're re-scored live,
@@ -396,7 +433,7 @@ export default function Home() {
 
   const replaceAll = useCallback(() => {
     if (matches.length === 0 || !base) return;
-    snapshot();
+    snapshot(`Replaced "${findText}" (${matches.length})`);
     setManualEdits((prev) => {
       const next = new Map(prev);
       for (const m of matches) {
@@ -427,7 +464,7 @@ export default function Home() {
   const onEditCell = useCallback(
     (row: number, col: number, value: CellValue) => {
       if (!base) return;
-      snapshot();
+      snapshot(`Edited ${base.table.headers[col] ?? "cell"}, row ${row + 2}`);
       const key = `${row}:${col}`;
       const originalValue = base.table.rows[row]?.[col] ?? null;
       setManualEdits((prev) => {
@@ -445,8 +482,8 @@ export default function Home() {
     (index: number) => {
       const f = result?.findings[index];
       if (!f) return;
-      snapshot();
       const key = findingKey(f);
+      snapshot(`${disabled.has(key) ? "Re-accepted" : "Un-ticked"} "${f.title}"`);
       setDisabled((prev) => {
         const next = new Set(prev);
         if (next.has(key)) next.delete(key);
@@ -454,23 +491,33 @@ export default function Home() {
         return next;
       });
     },
-    [result, snapshot],
+    [result, disabled, snapshot],
   );
 
   // Apply engine options. Constraints are preserved across a plain-English
   // command (which doesn't set them) so typed rules aren't wiped by a command.
   const onApplyOptions = useCallback(
     (next: EngineOptions) => {
-      snapshot();
+      const prevC = options.constraints?.length ?? 0;
+      const label = next.constraints && next.constraints.length > prevC
+        ? "Added expectation rule"
+        : next.constraints && next.constraints.length < prevC
+          ? "Removed expectation rule"
+          : (next.dedupeKey ?? []).join() !== (options.dedupeKey ?? []).join()
+            ? "Changed duplicate key"
+            : next.dateOutput !== options.dateOutput || next.dateOrder !== options.dateOrder
+              ? "Changed date handling"
+              : "Changed options";
+      snapshot(label);
       setOptions((prev) => ({ ...next, constraints: next.constraints ?? prev.constraints }));
     },
-    [snapshot],
+    [options, snapshot],
   );
 
   // Apply a full recipe: its options plus which fixes to leave un-accepted.
   const onApplyRecipe = useCallback(
     (recipe: Recipe) => {
-      snapshot();
+      snapshot(`Applied recipe "${recipe.name}"`);
       setOptions(recipe.options);
       setSkipRules(new Set(recipe.skipRules));
       setDisabled(new Set()); // recipe defines the accept/skip state
@@ -527,7 +574,7 @@ export default function Home() {
   const onSetAll = useCallback(
     (accept: boolean) => {
       if (!result) return;
-      snapshot();
+      snapshot(accept ? "Accepted all fixes" : "Cleared all fixes");
       if (accept) {
         setDisabled(new Set());
         setSkipRules(new Set());
@@ -543,12 +590,13 @@ export default function Home() {
     [result, snapshot, showToast],
   );
 
-  // Jump to and highlight the cells a finding refers to.
-  const onLocate = useCallback(
-    (index: number) => {
-      const f = result?.findings[index];
-      if (!f || !result) return;
+  // The table cells a finding refers to, keyed "row:col" — shared by click-to-
+  // locate and hover-to-preview.
+  const keysForFinding = useCallback(
+    (index: number): Set<string> => {
       const keys = new Set<string>();
+      const f = result?.findings[index];
+      if (!f || !result) return keys;
       if (f.patchIds.length > 0) {
         for (const p of result.patches) {
           if (p.rule !== f.rule) continue;
@@ -557,6 +605,15 @@ export default function Home() {
         }
       }
       if (f.cells) for (const c of f.cells) keys.add(`${c.row}:${c.col}`);
+      return keys;
+    },
+    [result],
+  );
+
+  // Jump to and highlight the cells a finding refers to.
+  const onLocate = useCallback(
+    (index: number) => {
+      const keys = keysForFinding(index);
       if (keys.size === 0) return;
 
       let target: string | null = null;
@@ -570,7 +627,45 @@ export default function Home() {
       setScrollToKey(target);
       setScrollNonce((n) => n + 1);
     },
-    [result],
+    [keysForFinding],
+  );
+
+  // Preview a finding's cells while the pointer rests on it — no scrolling,
+  // just the ring highlight, cleared on leave.
+  const onHoverFinding = useCallback(
+    (index: number | null) => {
+      setHighlightKeys(index === null ? new Set() : keysForFinding(index));
+    },
+    [keysForFinding],
+  );
+
+  // Column indices each finding touches, aligned with result.findings — feeds
+  // the findings panel's column filter.
+  const findingColumns = useMemo<Array<Set<number>>>(() => {
+    if (!result) return [];
+    const byRule = new Map<string, Set<number>>();
+    for (const p of result.patches) {
+      if (p.kind !== "cell" && p.kind !== "header") continue;
+      let cols = byRule.get(p.rule);
+      if (!cols) byRule.set(p.rule, (cols = new Set()));
+      cols.add(p.kind === "cell" ? p.cell.col : p.col);
+    }
+    return result.findings.map((f) => {
+      const cols = new Set(byRule.get(f.rule) ?? []);
+      if (f.column !== undefined) cols.add(f.column);
+      if (f.cells) for (const c of f.cells) cols.add(c.col);
+      return cols;
+    });
+  }, [result]);
+
+  // Constraints mined from the data (rule discovery) — already-added rules
+  // are filtered out inside the engine helper.
+  const suggestions = useMemo(
+    () =>
+      working && result
+        ? suggestConstraints(working, result.profile, options.constraints ?? [])
+        : [],
+    [working, result, options.constraints],
   );
 
   // Drag-and-drop a file anywhere onto the page.
@@ -773,10 +868,12 @@ export default function Home() {
             currentOptions={options}
             currentSkipRules={currentSkipRules}
             columns={base.table.headers}
+            suggestions={suggestions}
             onApplyOptions={onApplyOptions}
             onApplyRecipe={onApplyRecipe}
             onSplit={onSplit}
             onMerge={onMerge}
+            onUnpivot={onUnpivot}
           />
 
           <AnalysisPanel
@@ -787,6 +884,9 @@ export default function Home() {
             onToggle={toggleFinding}
             onSetAll={onSetAll}
             onLocate={onLocate}
+            onHover={onHoverFinding}
+            findingColumns={findingColumns}
+            table={working}
             profile={result.profile}
             result={result}
           />
@@ -815,13 +915,26 @@ export default function Home() {
               ))}
             </div>
             {undoDepth > 0 && (
-              <button
-                onClick={undo}
-                title="Undo last review action (Ctrl+Z)"
-                className="rounded-lg border border-line2 bg-card2 px-3 py-1.5 font-mono text-[11px] text-mut transition hover:text-body"
-              >
-                ↶ undo
-              </button>
+              <>
+                <button
+                  onClick={undo}
+                  title="Undo last review action (Ctrl+Z)"
+                  className="rounded-lg border border-line2 bg-card2 px-3 py-1.5 font-mono text-[11px] text-mut transition hover:text-body"
+                >
+                  ↶ undo
+                </button>
+                <button
+                  onClick={() => setShowHistory((v) => !v)}
+                  title="Every review action this session, most recent first"
+                  className={`rounded-lg border px-3 py-1.5 font-mono text-[11px] transition ${
+                    showHistory
+                      ? "border-teal/50 bg-teal/10 text-teal"
+                      : "border-line2 bg-card2 text-mut hover:text-body"
+                  }`}
+                >
+                  history · {undoDepth}
+                </button>
+              </>
             )}
             </div>
             <div className="flex gap-2.5">
@@ -871,6 +984,36 @@ export default function Home() {
               />
             </div>
           </div>
+
+          {showHistory && undoDepth > 0 && (
+            <div className="rounded-xl border border-line bg-card2 px-4 py-3">
+              <p className="label text-teal!">History</p>
+              <ul className="mt-2 space-y-1">
+                {undoStack.current
+                  .map((entry, i) => [entry, i] as const)
+                  .reverse()
+                  .map(([entry, i]) => (
+                    <li key={i} className="flex items-center justify-between gap-3">
+                      <span className="min-w-0 truncate font-mono text-[12px] text-body">
+                        <span className="mr-2 tabular-nums text-dim">{i + 1}.</span>
+                        {entry.label}
+                      </span>
+                      <button
+                        onClick={() => undoTo(i)}
+                        title="Rewind to before this action (undoes it and everything after)"
+                        className="shrink-0 rounded-md border border-line2 px-2.5 py-1 font-mono text-[11px] text-mut transition hover:text-coral"
+                      >
+                        ↶ rewind
+                      </button>
+                    </li>
+                  ))}
+              </ul>
+              <p className="mt-2 font-mono text-[11px] text-dim">
+                Most recent first. Rewinding undoes that action and everything after it —
+                your original data is untouched either way.
+              </p>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-card2 px-4 py-3">
             <span className="label text-teal!">Find &amp; replace</span>

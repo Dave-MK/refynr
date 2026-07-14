@@ -6,9 +6,13 @@ import { n, verb, type Fixer, type FixerOutput } from "./fixer.js";
 const EXACT_RULE = "remove-duplicate-rows";
 const FUZZY_RULE = "near-duplicate-rows";
 
-/** Beyond this many distinct rows the O(n²) nearest-neighbour pass is skipped
+/** Beyond this many distinct rows the nearest-neighbour pass is skipped
  *  (key-collision clustering still runs) — keeps big files responsive. */
-const NN_ROW_CAP = 2500;
+const NN_ROW_CAP = 50_000;
+
+/** Sorted-neighbourhood window: each fingerprint is compared only against
+ *  this many sort-adjacent neighbours per pass. */
+const SN_WINDOW = 8;
 
 /**
  * Whole-row fingerprint for key-collision clustering: every cell is lowercased,
@@ -64,17 +68,31 @@ function editBudget(len: number): number {
  */
 export const duplicateFixer: Fixer = {
   rule: EXACT_RULE,
-  run({ table }): FixerOutput {
+  run({ table, options }): FixerOutput {
     const patches: RowRemovalPatch[] = [];
     const exactSeen = new Map<string, number>();
     // fingerprint -> the row indices (first occurrences only) that produced it
     const printGroups = new Map<string, number[]>();
 
+    // User-chosen key columns narrow what "duplicate" means: matching on just
+    // these columns (e.g. Email) counts, even when other cells differ.
+    const keyCols = (options.dedupeKey ?? []).filter(
+      (c) => c >= 0 && c < table.headers.length,
+    );
+    const keyNames = keyCols.map((c) => `"${table.headers[c]}"`).join(" + ");
+
     const exactKey = (row: (typeof table.rows)[number]): string =>
-      row.map((v) => cleanWhitespace(cellText(v)).toLowerCase()).join(" ");
+      (keyCols.length > 0 ? keyCols.map((c) => row[c] ?? null) : row)
+        .map((v) => cleanWhitespace(cellText(v)).toLowerCase())
+        .join(" ");
 
     table.rows.forEach((row, r) => {
       if (row.every((v) => cellText(v).trim() === "")) return; // blank rows handled elsewhere
+      if (
+        keyCols.length > 0 &&
+        keyCols.every((c) => cellText(row[c] ?? null).trim() === "")
+      )
+        return; // no key present — can't call it a duplicate
       const key = exactKey(row);
       const firstAt = exactSeen.get(key);
       if (firstAt !== undefined) {
@@ -84,7 +102,10 @@ export const duplicateFixer: Fixer = {
           rule: EXACT_RULE,
           row: r,
           duplicateOf: firstAt,
-          reason: `Row ${r + 2} is an exact duplicate of row ${firstAt + 2} — every cell matches once whitespace and letter case are ignored. The first occurrence is kept.`,
+          reason:
+            keyCols.length > 0
+              ? `Row ${r + 2} duplicates row ${firstAt + 2} on ${keyNames} — your chosen duplicate key. The first occurrence is kept.`
+              : `Row ${r + 2} is an exact duplicate of row ${firstAt + 2} — every cell matches once whitespace and letter case are ignored. The first occurrence is kept.`,
           confidence: 1,
         });
       } else {
@@ -103,7 +124,11 @@ export const duplicateFixer: Fixer = {
     );
 
     // Nearest-neighbour pass over the *unique* fingerprints: merge clusters
-    // whose fingerprints are a typo apart. Skipped on very large inputs.
+    // whose fingerprints are a typo apart. Multi-pass sorted neighbourhood
+    // (Rahm & Do's recommended scaling method): instead of comparing all
+    // pairs, sort the fingerprints two ways — forwards, and reversed so a
+    // typo in the first word can't push variants apart — and compare each
+    // only against its SN_WINDOW sort-neighbours. O(n·w) instead of O(n²).
     const prints = [...printGroups.keys()];
     if (prints.length <= NN_ROW_CAP) {
       const parent = new Map(prints.map((p) => [p, p]));
@@ -112,14 +137,23 @@ export const duplicateFixer: Fixer = {
         while (parent.get(root) !== root) root = parent.get(root)!;
         return root;
       };
-      for (let i = 0; i < prints.length; i++) {
-        for (let j = i + 1; j < prints.length; j++) {
-          const a = prints[i]!;
-          const b = prints[j]!;
-          if (find(a) === find(b)) continue;
-          const budget = editBudget(Math.min(a.length, b.length));
-          if (boundedEditDistance(a, b, budget) <= budget) {
-            parent.set(find(a), find(b));
+      const tryUnion = (a: string, b: string): void => {
+        if (find(a) === find(b)) return;
+        const budget = editBudget(Math.min(a.length, b.length));
+        if (boundedEditDistance(a, b, budget) <= budget) {
+          parent.set(find(a), find(b));
+        }
+      };
+      const reverse = (s: string): string => [...s].reverse().join("");
+      const passes: string[][] = [
+        [...prints].sort(),
+        [...prints].sort((a, b) => (reverse(a) < reverse(b) ? -1 : 1)),
+      ];
+      for (const ordered of passes) {
+        for (let i = 0; i < ordered.length; i++) {
+          const stop = Math.min(ordered.length, i + 1 + SN_WINDOW);
+          for (let j = i + 1; j < stop; j++) {
+            tryUnion(ordered[i]!, ordered[j]!);
           }
         }
       }
@@ -143,8 +177,8 @@ export const duplicateFixer: Fixer = {
       findings.push({
         rule: EXACT_RULE,
         severity: "error",
-        title: `${n(patches.length, "exact duplicate row")}`,
-        detail: `${n(patches.length, "row")} ${verb(patches.length, "is an exact duplicate of an earlier row", "are exact duplicates of earlier rows")} (ignoring whitespace and letter case). Duplicates inflate counts, break unique keys, and double-send communications. The first occurrence of each is kept.`,
+        title: `${n(patches.length, keyCols.length > 0 ? "duplicate row" : "exact duplicate row")}`,
+        detail: `${n(patches.length, "row")} ${verb(patches.length, "is a duplicate of an earlier row", "are duplicates of earlier rows")} ${keyCols.length > 0 ? `matching on ${keyNames} — your chosen duplicate key` : "(every cell matches, ignoring whitespace and letter case)"}. Duplicates inflate counts, break unique keys, and double-send communications. The first occurrence of each is kept.`,
         count: patches.length,
         patchIds: patches.map((p) => p.id),
       });

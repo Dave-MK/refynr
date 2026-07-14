@@ -129,6 +129,12 @@ export interface EngineOptions {
   disabledRules?: string[];
   /** User-defined expectations checked as pass/fail advisories (never auto-fixed). */
   constraints?: Constraint[];
+  /**
+   * Column indices that identify a record for duplicate detection. When set,
+   * rows matching on just these columns are exact duplicates (first kept);
+   * when empty/omitted, the whole row must match.
+   */
+  dedupeKey?: number[];
 }
 
 /**

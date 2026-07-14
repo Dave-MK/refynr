@@ -117,3 +117,44 @@ export function mergeColumns(
 
   return { headers, rows };
 }
+
+export interface UnpivotOptions {
+  /** Header for the column holding the folded columns' names. Default "Field". */
+  fieldName?: string;
+  /** Header for the column holding the folded columns' values. Default "Value". */
+  valueName?: string;
+}
+
+/**
+ * Wide-to-long reshape ("unpivot"/"melt"): fold the given value columns into
+ * two columns — one naming the source column, one holding its value — while
+ * every other column repeats as the row identifier. A row with N folded
+ * columns becomes N rows (empty folded cells are kept, so no data is lost
+ * and the long table's row count is predictable: rows × folded columns).
+ */
+export function unpivot(
+  table: Table,
+  valueCols: number[],
+  options: UnpivotOptions = {},
+): Table {
+  const folded = [...new Set(valueCols)]
+    .filter((c) => c >= 0 && c < table.headers.length)
+    .sort((a, b) => a - b);
+  if (folded.length < 2 || folded.length >= table.headers.length) return table;
+
+  const foldedSet = new Set(folded);
+  const idCols = table.headers.map((_, i) => i).filter((i) => !foldedSet.has(i));
+  const fieldName = options.fieldName?.trim() || "Field";
+  const valueName = options.valueName?.trim() || "Value";
+
+  const headers = [...idCols.map((i) => table.headers[i]!), fieldName, valueName];
+  const rows: CellValue[][] = [];
+  for (const row of table.rows) {
+    const id = idCols.map((i) => row[i] ?? null);
+    for (const c of folded) {
+      rows.push([...id, table.headers[c]!, row[c] ?? null]);
+    }
+  }
+
+  return { headers, rows };
+}

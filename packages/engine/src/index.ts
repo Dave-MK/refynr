@@ -5,6 +5,8 @@ import { applyPatches } from "./table.js";
 import type { Fixer } from "./fixers/fixer.js";
 import { whitespaceFixer } from "./fixers/whitespace.js";
 import { casingFixer } from "./fixers/casing.js";
+import { valueFixer } from "./fixers/values.js";
+import { dependencyFixer } from "./fixers/dependencies.js";
 import { emailFixer } from "./fixers/emails.js";
 import { postcodeFixer } from "./fixers/postcodes.js";
 import { phoneFixer } from "./fixers/phones.js";
@@ -13,6 +15,7 @@ import { duplicateFixer } from "./fixers/duplicates.js";
 import { completenessFixer } from "./fixers/completeness.js";
 import { encodingFixer } from "./fixers/encoding.js";
 import { integrityFixer } from "./fixers/integrity.js";
+import { piiFixer } from "./fixers/pii.js";
 import { numberFixer } from "./fixers/numbers.js";
 import { booleanFixer } from "./fixers/booleans.js";
 import { headerFixer } from "./fixers/headers.js";
@@ -32,7 +35,7 @@ export {
   type FindReplaceOptions,
   type Replacement,
 } from "./table.js";
-export { checkConstraints } from "./expectations.js";
+export { checkConstraints, suggestConstraints } from "./expectations.js";
 export {
   diffTables,
   type TableDiff,
@@ -60,8 +63,10 @@ export { parseInstruction, type Instruction } from "./nl.js";
 export {
   splitColumn,
   mergeColumns,
+  unpivot,
   type SplitOptions,
   type MergeOptions,
+  type UnpivotOptions,
 } from "./transform.js";
 
 const DEFAULT_OPTIONS: Required<EngineOptions> = {
@@ -69,6 +74,7 @@ const DEFAULT_OPTIONS: Required<EngineOptions> = {
   dateOutput: "iso",
   disabledRules: [],
   constraints: [],
+  dedupeKey: [],
 };
 
 /** Registration order = execution order = display order of findings. */
@@ -79,6 +85,7 @@ const FIXERS: Fixer[] = [
   duplicateFixer,
   completenessFixer,
   casingFixer,
+  valueFixer,
   dateFixer,
   numberFixer,
   booleanFixer,
@@ -89,6 +96,8 @@ const FIXERS: Fixer[] = [
   sortCodeFixer,
   companyNumberFixer,
   integrityFixer,
+  dependencyFixer,
+  piiFixer,
 ];
 
 /**

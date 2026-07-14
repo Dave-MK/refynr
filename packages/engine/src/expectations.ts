@@ -29,6 +29,94 @@ function describe(c: Constraint): string {
   }
 }
 
+const ID_ISH_RE =
+  /(^|[^a-z])(id|ids|ref|reference|code|sku|key|account|acct|no|number)([^a-z]|$)/i;
+
+/** Most suggestions beyond this are noise — keep the list glanceable. */
+const MAX_SUGGESTIONS = 5;
+
+/**
+ * Mine candidate constraints from what already holds in the data — the
+ * "rule discovery" step the literature says shouldn't be left entirely to
+ * hand-authoring. Each suggestion is true of the current table (so adding it
+ * passes today and guards future exports) and is only ever *suggested*: the
+ * user reviews and adds it, refynr never asserts a rule on its own.
+ *
+ * Deterministic, and deliberately conservative: unique only for columns that
+ * plausibly identify records (id-ish names, emails), allowed-values only for
+ * small categorical sets, not-null only for key-like columns that are 100%
+ * filled. Pass the user's existing constraints to avoid re-suggesting them.
+ */
+export function suggestConstraints(
+  table: Table,
+  profile: TableProfile,
+  existing: Constraint[] = [],
+): Constraint[] {
+  const out: Constraint[] = [];
+  const has = (column: string, type: Constraint["type"]): boolean =>
+    existing.some((c) => c.column === column && c.type === type) ||
+    out.some((c) => c.column === column && c.type === type);
+  const rows = profile.rowCount;
+  if (rows < 10) return out;
+
+  for (const col of profile.columns) {
+    if (out.length >= MAX_SUGGESTIONS) break;
+    const keyish = ID_ISH_RE.test(col.name) || col.type === "email";
+
+    // unique: every non-empty value is distinct, the column is mostly filled,
+    // and it plausibly identifies records.
+    if (
+      keyish &&
+      col.nonEmpty >= 10 &&
+      col.distinct === col.nonEmpty &&
+      col.nonEmpty >= rows * 0.9 &&
+      !has(col.name, "unique")
+    ) {
+      out.push({ column: col.name, type: "unique" });
+    }
+
+    // allowed-values: a small categorical set used repeatedly.
+    if (
+      out.length < MAX_SUGGESTIONS &&
+      (col.type === "string" || col.type === "boolean") &&
+      col.distinct >= 2 &&
+      col.distinct <= 6 &&
+      col.nonEmpty >= col.distinct * 3 &&
+      !has(col.name, "allowed-values")
+    ) {
+      // Collect the distinct display values (first-seen casing), capped.
+      const values: string[] = [];
+      const seen = new Set<string>();
+      for (const row of table.rows) {
+        const v = row[col.index];
+        if (isEmptyCell(v)) continue;
+        const display = cellText(v).trim();
+        const key = display.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        values.push(display);
+        if (values.length > 6) break;
+      }
+      if (values.length >= 2 && values.length <= 6) {
+        out.push({ column: col.name, type: "allowed-values", values });
+      }
+    }
+
+    // not-null: a key-like column that is completely filled today.
+    if (
+      out.length < MAX_SUGGESTIONS &&
+      keyish &&
+      col.empty === 0 &&
+      col.nonEmpty >= 10 &&
+      !has(col.name, "not-null")
+    ) {
+      out.push({ column: col.name, type: "not-null" });
+    }
+  }
+
+  return out;
+}
+
 /**
  * Evaluate user-defined constraints against a table and return advisory
  * findings — the "expectations-lite" layer that lets refynr assert simple
