@@ -52,12 +52,28 @@ export const dependencyFixer: Fixer = {
     const norm = (v: unknown): string =>
       cleanWhitespace(cellText(v as never)).toLowerCase();
 
+    // Normalise each candidate column ONCE up front. The pair loop below
+    // visits up to candidates² ordered pairs; normalising inside it re-does
+    // the same regex + lowercase work per pair instead of per column.
+    const normed = new Map<number, Array<string | null>>();
+    for (const c of candidates) {
+      const arr = new Array<string | null>(rowCount);
+      for (let r = 0; r < rowCount; r++) {
+        const v = table.rows[r]![c.index];
+        arr[r] = isEmptyCell(v) ? null : norm(v);
+      }
+      normed.set(c.index, arr);
+    }
+
     for (const a of candidates) {
       for (const b of candidates) {
         if (a.index === b.index) continue;
         // A determinant should be at least as specific as what it determines
-        // (postcode -> city, not city -> postcode).
+        // (postcode -> city, not city -> postcode). Ties run in ONE direction
+        // only, else a 1:1 pair (code <-> name) reports the same
+        // disagreements twice and double-counts them in the score.
         if (a.distinct < b.distinct) continue;
+        if (a.distinct === b.distinct && a.index > b.index) continue;
 
         // key(A) -> value(B) -> { count, firstDisplay, rows }
         const map = new Map<
@@ -65,13 +81,13 @@ export const dependencyFixer: Fixer = {
           Map<string, { count: number; display: string; rows: number[] }>
         >();
         let paired = 0;
+        const na = normed.get(a.index)!;
+        const nb = normed.get(b.index)!;
         for (let r = 0; r < rowCount; r++) {
-          const va = table.rows[r]![a.index];
-          const vb = table.rows[r]![b.index];
-          if (isEmptyCell(va) || isEmptyCell(vb)) continue;
+          const ka = na[r];
+          const kb = nb[r];
+          if (ka === null || kb === null) continue;
           paired++;
-          const ka = norm(va);
-          const kb = norm(vb);
           let inner = map.get(ka);
           if (!inner) map.set(ka, (inner = new Map()));
           const entry = inner.get(kb);
@@ -79,7 +95,11 @@ export const dependencyFixer: Fixer = {
             entry.count++;
             entry.rows.push(r);
           } else {
-            inner.set(kb, { count: 1, display: cleanWhitespace(cellText(vb as never)), rows: [r] });
+            inner.set(kb, {
+              count: 1,
+              display: cleanWhitespace(cellText(table.rows[r]![b.index] as never)),
+              rows: [r],
+            });
           }
         }
         if (paired < 20) continue;

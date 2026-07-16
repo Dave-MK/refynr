@@ -31,9 +31,11 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
   already hold (unique/not-null for id-ish columns, allowed-values for small
   categorical sets, ≤5 suggestions) — the web shell offers them as one-click
   chips under the expectations editor.
-- **Key-column dedupe** (`EngineOptions.dedupeKey`): column indices that
+- **Key-column dedupe** (`EngineOptions.dedupeKey`): column **names** that
   define "duplicate" — rows matching on just those columns are removal
-  patches; empty = whole-row. UI is the "duplicates match on" chip row.
+  patches; empty = whole-row. Names (resolved to indices inside the engine,
+  unknown names ignored) so keys survive recipes, reshapes, and reordered
+  re-exports. Saved in recipes. UI is the "duplicates match on" chip row.
 - **Dataset diff** (`diff.ts`): `diffTables(before, after, key?)` — value-level
   added/removed/changed/unchanged, key inferred or given. The "what changed
   since last export?" wedge.

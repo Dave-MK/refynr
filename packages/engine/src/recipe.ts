@@ -21,7 +21,7 @@ export interface Recipe {
   name: string;
   /** ISO timestamp; optional so recipes stay deterministic in tests. */
   createdAt?: string;
-  /** Engine options to run with (date handling, disabled rules). */
+  /** Engine options to run with (date handling, disabled rules, constraints, duplicate key). */
   options: EngineOptions;
   /**
    * Finding rules the user chose NOT to accept (un-ticked). Their fixers still
@@ -49,6 +49,9 @@ export function createRecipe(
       ...(options.dateOutput ? { dateOutput: options.dateOutput } : {}),
       disabledRules: [...(options.disabledRules ?? [])],
       ...(options.constraints?.length ? { constraints: options.constraints } : {}),
+      ...(options.dedupeKey?.length
+        ? { dedupeKey: options.dedupeKey.filter((k) => typeof k === "string") }
+        : {}),
     },
     skipRules: [...skipRules],
   };

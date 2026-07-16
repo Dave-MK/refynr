@@ -167,6 +167,14 @@ export function checkConstraints(
     }
 
     const seen = new Map<string, number>();
+    // Allowed-values compares trimmed + case-folded (like the unique rule):
+    // whitespace/case drift is a defect the fixers already handle, and the
+    // suggestion miner dedupes values the same way — a suggested rule must
+    // keep passing on the very data it was mined from.
+    const allowed =
+      c.type === "allowed-values"
+        ? new Set((c.values ?? []).map((v) => v.trim().toLowerCase()))
+        : null;
     table.rows.forEach((row, r) => {
       const v = row[col];
       const empty = isEmptyCell(v);
@@ -197,7 +205,8 @@ export function checkConstraints(
           break;
         }
         case "allowed-values":
-          if (!empty && !(c.values ?? []).includes(cellText(v))) bad.push({ row: r, col });
+          if (!empty && !allowed!.has(cellText(v).trim().toLowerCase()))
+            bad.push({ row: r, col });
           break;
       }
     });

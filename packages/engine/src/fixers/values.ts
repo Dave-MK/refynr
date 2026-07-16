@@ -43,11 +43,18 @@ export const valueFixer: Fixer = {
 
       // fingerprint -> cleaned variant -> count
       const groups = new Map<string, Map<string, number>>();
+      // cleaned value -> fingerprint, so the patching pass below reuses the
+      // work instead of re-fingerprinting every cell (bounded by MAX_DISTINCT).
+      const fpByCleaned = new Map<string, string>();
       for (const row of table.rows) {
         const v = row[col.index];
         if (isEmptyCell(v) || typeof v !== "string") continue;
         const cleaned = cleanWhitespace(v);
-        const fp = valueFingerprint(cleaned);
+        let fp = fpByCleaned.get(cleaned);
+        if (fp === undefined) {
+          fp = valueFingerprint(cleaned);
+          fpByCleaned.set(cleaned, fp);
+        }
         if (!fp) continue;
         let m = groups.get(fp);
         if (!m) groups.set(fp, (m = new Map()));
@@ -78,7 +85,7 @@ export const valueFixer: Fixer = {
         const v = row[col.index];
         if (isEmptyCell(v) || typeof v !== "string") return;
         const cleaned = cleanWhitespace(v);
-        const winner = winners.get(valueFingerprint(cleaned));
+        const winner = winners.get(fpByCleaned.get(cleaned) ?? "");
         if (winner === undefined || winner === cleaned) return;
         // Case-only difference from the winner is the casing fixer's job.
         if (winner.toLowerCase() === cleaned.toLowerCase()) return;

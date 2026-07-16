@@ -1,9 +1,12 @@
 import { type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
+import { supabaseConfigured } from "@/lib/supabase/config";
 
 export async function middleware(request: NextRequest) {
-  // If Supabase isn't configured yet, do nothing — the app still runs locally.
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) return;
+  // If Supabase isn't fully configured (URL *and* key), do nothing — the app
+  // still runs locally. Checking the URL alone once crashed every request
+  // when only the key was missing.
+  if (!supabaseConfigured) return;
   return await updateSession(request);
 }
 

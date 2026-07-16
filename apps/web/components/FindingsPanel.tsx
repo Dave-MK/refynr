@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Finding } from "@refynr/engine";
 
 function pillFor(f: Finding): { className: string; text: string } {
@@ -44,6 +44,13 @@ export function FindingsPanel({
   findingColumns: Array<Set<number>>;
 }) {
   const [filterCol, setFilterCol] = useState<number | "all">("all");
+
+  // Column indices go stale when the table is reshaped or a new file loads —
+  // a leftover filter would silently hide every finding. Reset on any change.
+  const columnsKey = JSON.stringify(columns);
+  useEffect(() => {
+    setFilterCol("all");
+  }, [columnsKey]);
 
   // Column filter: a finding shows when it touches the chosen column;
   // table-wide findings (blank rows, PII notice) only show under "all".
@@ -114,7 +121,7 @@ export function FindingsPanel({
       {acceptedPatches < totalPatches && (
         <p className="border-b border-line bg-amber/5 px-6 py-2.5 font-mono text-[11px] text-amber">
           {acceptedPatches.toLocaleString("en-GB")} of {totalPatches.toLocaleString("en-GB")} proposed
-          fixes accepted — the rest stay unfixed in the export.
+          {totalPatches === 1 ? " fix" : " fixes"} accepted — what&apos;s left stays unfixed in the export.
         </p>
       )}
       {visible.length === 0 ? (

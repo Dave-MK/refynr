@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyPatches,
   buildReport,
+  checkConstraints,
   cleanse,
   createRecipe,
   diffTables,
@@ -612,6 +613,28 @@ describe("cross-column dependency check", () => {
     const finding = cleanse(table).findings.find((f) => f.rule === "inconsistent-mapping");
     expect(finding).toBeUndefined();
   });
+
+  it("reports a 1:1 pair (equal distinct counts) once, not in both directions", () => {
+    // Product code <-> name in 1:1 correspondence; the bad row reuses an
+    // EXISTING name so both columns keep equal distinct counts — without the
+    // tie-break both directions would flag the same disagreement twice.
+    const rows: string[][] = [];
+    const pairs: Array<[string, string]> = [
+      ["P-1", "Widget"],
+      ["P-2", "Gadget"],
+      ["P-3", "Sprocket"],
+      ["P-4", "Flange"],
+    ];
+    for (const [code, name] of pairs) {
+      for (let i = 0; i < 6; i++) rows.push([code, name]);
+    }
+    rows[2] = ["P-1", "Gadget"]; // P-1 wrongly carries P-2's product name
+    const table: Table = { headers: ["Code", "Product"], rows };
+    const findings = cleanse(table).findings.filter(
+      (f) => f.rule === "inconsistent-mapping",
+    );
+    expect(findings).toHaveLength(1);
+  });
 });
 
 describe("key-column duplicate detection", () => {
@@ -627,7 +650,7 @@ describe("key-column duplicate detection", () => {
   };
 
   it("deduplicates on the chosen key columns only", () => {
-    const result = cleanse(table, { dedupeKey: [1] });
+    const result = cleanse(table, { dedupeKey: ["Email"] });
     const removals = result.patches.filter((p) => p.kind === "remove-row");
     expect(removals).toHaveLength(1);
     expect(removals[0]!.kind === "remove-row" && removals[0]!.row).toBe(1);
@@ -637,6 +660,33 @@ describe("key-column duplicate detection", () => {
   it("falls back to whole-row matching when no key is set", () => {
     const result = cleanse(table);
     expect(result.patches.filter((p) => p.kind === "remove-row")).toHaveLength(0);
+  });
+
+  it("ignores key names that don't exist in the table", () => {
+    const result = cleanse(table, { dedupeKey: ["Email", "NoSuchColumn"] });
+    const removals = result.patches.filter((p) => p.kind === "remove-row");
+    expect(removals).toHaveLength(1); // behaves as a plain Email key
+  });
+
+  it("never collides multi-word values across key-column boundaries", () => {
+    const t: Table = {
+      headers: ["First", "Last", "Notes"],
+      rows: [
+        ["Anna Marie", "Smith", "person one"],
+        ["Anna", "Marie Smith", "a different person"],
+      ],
+    };
+    const result = cleanse(t, { dedupeKey: ["First", "Last"] });
+    expect(result.patches.filter((p) => p.kind === "remove-row")).toHaveLength(0);
+  });
+
+  it("survives a recipe round-trip", () => {
+    const recipe = createRecipe("keyed", { dedupeKey: ["Email"] });
+    const reparsed = parseRecipe(serializeRecipe(recipe));
+    expect(reparsed.options.dedupeKey).toEqual(["Email"]);
+    const run = runRecipe(table, reparsed);
+    const removals = run.result.patches.filter((p) => p.kind === "remove-row");
+    expect(removals).toHaveLength(1);
   });
 });
 
@@ -687,6 +737,25 @@ describe("constraint suggestions", () => {
   it("never re-suggests an existing constraint", () => {
     const existing = suggestConstraints(table, profileTable(table));
     expect(suggestConstraints(table, profileTable(table), existing)).toEqual([]);
+  });
+
+  it("suggested allowed-values rules pass on the data they were mined from", () => {
+    // Mixed casing and stray whitespace must not fail a rule mined
+    // case-insensitively — the suggestion promises "already holds today".
+    const messyCase: Table = {
+      headers: ["ID", "Status"],
+      rows: Array.from({ length: 12 }, (_, i) => [
+        `${i}`,
+        i % 3 === 0 ? "active" : i % 3 === 1 ? "Active " : "Archived",
+      ]),
+    };
+    const profile = profileTable(messyCase);
+    const suggested = suggestConstraints(messyCase, profile).filter(
+      (s) => s.type === "allowed-values",
+    );
+    expect(suggested).toHaveLength(1);
+    const findings = checkConstraints(messyCase, profile, suggested);
+    expect(findings).toEqual([]);
   });
 });
 

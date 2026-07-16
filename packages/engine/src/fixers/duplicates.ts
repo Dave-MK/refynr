@@ -14,6 +14,18 @@ const NN_ROW_CAP = 50_000;
  *  this many sort-adjacent neighbours per pass. */
 const SN_WINDOW = 8;
 
+/** Below this many unique fingerprints the exhaustive all-pairs comparison
+ *  runs instead of the windowed scan — it catches typo-pairs that sort far
+ *  apart in both sort orders. Kept small because cleanse() re-runs on the
+ *  main thread per edit: 500² /2 bounded-edit-distance calls is the budget. */
+const ALL_PAIRS_CAP = 500;
+
+/** Joins cells inside a composite key. NUL can never survive cleanWhitespace
+ *  inside a value, so multi-word cells can't collide across column boundaries
+ *  (("Anna Marie","Smith") vs ("Anna","Marie Smith")). Built with fromCharCode
+ *  so no literal control character sits in this source file. */
+const KEY_SEP = String.fromCharCode(0);
+
 /**
  * Whole-row fingerprint for key-collision clustering: every cell is lowercased,
  * stripped of punctuation, and its words sorted, so token order and punctuation
@@ -75,16 +87,22 @@ export const duplicateFixer: Fixer = {
     const printGroups = new Map<string, number[]>();
 
     // User-chosen key columns narrow what "duplicate" means: matching on just
-    // these columns (e.g. Email) counts, even when other cells differ.
-    const keyCols = (options.dedupeKey ?? []).filter(
-      (c) => c >= 0 && c < table.headers.length,
-    );
+    // these columns (e.g. Email) counts, even when other cells differ. Keys
+    // are header names resolved here, so a saved recipe or a reshaped table
+    // can never silently bind the key to the wrong column position.
+    const keyCols = (options.dedupeKey ?? [])
+      .map((name) => table.headers.indexOf(name))
+      .filter((c) => c >= 0)
+      .sort((a, b) => a - b);
     const keyNames = keyCols.map((c) => `"${table.headers[c]}"`).join(" + ");
 
+    // Cells are joined with a separator that cleanWhitespace can never leave
+    // inside a value, so multi-word cells can't collide across column
+    // boundaries (("Anna Marie","Smith") vs ("Anna","Marie Smith")).
     const exactKey = (row: (typeof table.rows)[number]): string =>
       (keyCols.length > 0 ? keyCols.map((c) => row[c] ?? null) : row)
         .map((v) => cleanWhitespace(cellText(v)).toLowerCase())
-        .join(" ");
+        .join(KEY_SEP);
 
     table.rows.forEach((row, r) => {
       if (row.every((v) => cellText(v).trim() === "")) return; // blank rows handled elsewhere
@@ -144,16 +162,31 @@ export const duplicateFixer: Fixer = {
           parent.set(find(a), find(b));
         }
       };
-      const reverse = (s: string): string => [...s].reverse().join("");
-      const passes: string[][] = [
-        [...prints].sort(),
-        [...prints].sort((a, b) => (reverse(a) < reverse(b) ? -1 : 1)),
-      ];
-      for (const ordered of passes) {
-        for (let i = 0; i < ordered.length; i++) {
-          const stop = Math.min(ordered.length, i + 1 + SN_WINDOW);
-          for (let j = i + 1; j < stop; j++) {
-            tryUnion(ordered[i]!, ordered[j]!);
+      if (prints.length <= ALL_PAIRS_CAP) {
+        // Small enough for the exhaustive comparison — window-based scanning
+        // would miss typo-pairs that sort far apart in both orders.
+        for (let i = 0; i < prints.length; i++) {
+          for (let j = i + 1; j < prints.length; j++) {
+            tryUnion(prints[i]!, prints[j]!);
+          }
+        }
+      } else {
+        // Reversed keys are precomputed once (Schwartzian transform) — the
+        // sort comparator runs O(n log n) times and must not allocate.
+        const reverse = (s: string): string => [...s].reverse().join("");
+        const reversed = new Map(prints.map((p) => [p, reverse(p)]));
+        const passes: string[][] = [
+          [...prints].sort(),
+          [...prints].sort((a, b) =>
+            reversed.get(a)! < reversed.get(b)! ? -1 : 1,
+          ),
+        ];
+        for (const ordered of passes) {
+          for (let i = 0; i < ordered.length; i++) {
+            const stop = Math.min(ordered.length, i + 1 + SN_WINDOW);
+            for (let j = i + 1; j < stop; j++) {
+              tryUnion(ordered[i]!, ordered[j]!);
+            }
           }
         }
       }

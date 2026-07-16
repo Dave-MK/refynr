@@ -69,7 +69,10 @@ export default function Home() {
   // "Copy" button feedback, drag-over highlight, and finding→cell locating.
   const [copied, setCopied] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [highlightKeys, setHighlightKeys] = useState<Set<string>>(new Set());
+  // Locate pins a highlight until the next action; hover previews on top of
+  // it — separate states so mouseleave can't wipe a located highlight.
+  const [pinnedKeys, setPinnedKeys] = useState<Set<string>>(new Set());
+  const [hoverKeys, setHoverKeys] = useState<Set<string> | null>(null);
   const [scrollToKey, setScrollToKey] = useState<string | null>(null);
   const [scrollNonce, setScrollNonce] = useState(0);
   // Live stage line while the worker chews a big file ("Analysing 100,000 rows…").
@@ -144,7 +147,8 @@ export default function Home() {
       setSheetName(msg.sheetName ?? null);
       setCompareTable(null); // a fresh dataset invalidates any prior comparison
       setCompareName("");
-      setHighlightKeys(new Set());
+      setPinnedKeys(new Set());
+      setHoverKeys(null);
       setScrollToKey(null);
       undoStack.current = [];
       setUndoDepth(0);
@@ -322,7 +326,8 @@ export default function Home() {
     setSkipRules(prev.skipRules);
     setOptions(prev.options);
     setManualEdits(prev.manualEdits);
-    setHighlightKeys(new Set());
+    setPinnedKeys(new Set());
+    setHoverKeys(null);
     setScrollToKey(null);
     setUndoDepth(undoStack.current.length);
     setToast(null);
@@ -381,7 +386,8 @@ export default function Home() {
       snapshot(label);
       setBase({ table: next, result: cleanse(next, options) });
       setManualEdits(new Map());
-      setHighlightKeys(new Set());
+      setPinnedKeys(new Set());
+      setHoverKeys(null);
       setScrollToKey(null);
       showToast(label);
     },
@@ -590,31 +596,34 @@ export default function Home() {
     [result, snapshot, showToast],
   );
 
-  // The table cells a finding refers to, keyed "row:col" — shared by click-to-
-  // locate and hover-to-preview.
-  const keysForFinding = useCallback(
-    (index: number): Set<string> => {
-      const keys = new Set<string>();
-      const f = result?.findings[index];
-      if (!f || !result) return keys;
-      if (f.patchIds.length > 0) {
-        for (const p of result.patches) {
-          if (p.rule !== f.rule) continue;
-          if (p.kind === "cell") keys.add(`${p.cell.row}:${p.cell.col}`);
-          else if (p.kind === "remove-row") keys.add(`${p.row}:0`);
-        }
-      }
+  // The table cells each finding refers to, keyed "row:col", aligned with
+  // result.findings — built ONCE per result so hover/locate are O(1) lookups
+  // instead of an O(patches) scan per mouse event.
+  const findingCellKeys = useMemo<Array<Set<string>>>(() => {
+    if (!result) return [];
+    const byRule = new Map<string, Set<string>>();
+    for (const p of result.patches) {
+      let keys = byRule.get(p.rule);
+      if (!keys) byRule.set(p.rule, (keys = new Set()));
+      if (p.kind === "cell") keys.add(`${p.cell.row}:${p.cell.col}`);
+      else if (p.kind === "remove-row") keys.add(`${p.row}:0`);
+    }
+    return result.findings.map((f) => {
+      const keys = new Set(
+        f.patchIds.length > 0 ? (byRule.get(f.rule) ?? []) : [],
+      );
       if (f.cells) for (const c of f.cells) keys.add(`${c.row}:${c.col}`);
       return keys;
-    },
-    [result],
-  );
+    });
+  }, [result]);
 
-  // Jump to and highlight the cells a finding refers to.
+  // Jump to and highlight the cells a finding refers to. The highlight is
+  // pinned: it stays put until the next locate/edit/reset, so the user can
+  // move the pointer to the table without losing it.
   const onLocate = useCallback(
     (index: number) => {
-      const keys = keysForFinding(index);
-      if (keys.size === 0) return;
+      const keys = findingCellKeys[index];
+      if (!keys || keys.size === 0) return;
 
       let target: string | null = null;
       let minRow = Infinity;
@@ -623,20 +632,21 @@ export default function Home() {
         if (r < minRow) { minRow = r; target = k; }
       }
       setMode("diff"); // the Changes view is where patches / advisories render
-      setHighlightKeys(keys);
+      setPinnedKeys(keys);
+      setHoverKeys(null);
       setScrollToKey(target);
       setScrollNonce((n) => n + 1);
     },
-    [keysForFinding],
+    [findingCellKeys],
   );
 
   // Preview a finding's cells while the pointer rests on it — no scrolling,
-  // just the ring highlight, cleared on leave.
+  // just the ring highlight; leaving reverts to any pinned (located) cells.
   const onHoverFinding = useCallback(
     (index: number | null) => {
-      setHighlightKeys(index === null ? new Set() : keysForFinding(index));
+      setHoverKeys(index === null ? null : (findingCellKeys[index] ?? null));
     },
-    [keysForFinding],
+    [findingCellKeys],
   );
 
   // Column indices each finding touches, aligned with result.findings — feeds
@@ -1077,7 +1087,7 @@ export default function Home() {
             headerPatches={accepted.headerPatches}
             mode={mode}
             onEditCell={onEditCell}
-            highlightKeys={highlightKeys}
+            highlightKeys={hoverKeys ?? pinnedKeys}
             scrollToKey={scrollToKey}
             scrollNonce={scrollNonce}
           />

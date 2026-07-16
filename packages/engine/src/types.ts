@@ -130,11 +130,14 @@ export interface EngineOptions {
   /** User-defined expectations checked as pass/fail advisories (never auto-fixed). */
   constraints?: Constraint[];
   /**
-   * Column indices that identify a record for duplicate detection. When set,
-   * rows matching on just these columns are exact duplicates (first kept);
-   * when empty/omitted, the whole row must match.
+   * Header names of the columns that identify a record for duplicate
+   * detection. When set, rows matching on just these columns are exact
+   * duplicates (first kept); when empty/omitted, the whole row must match.
+   * Names (not indices) so the key survives recipes, re-exports with
+   * reordered columns, and shape transforms — like `Constraint.column`.
+   * Names that don't exist in the table are ignored.
    */
-  dedupeKey?: number[];
+  dedupeKey?: string[];
 }
 
 /**

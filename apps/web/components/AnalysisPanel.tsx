@@ -20,8 +20,9 @@ type Tab = "health" | "findings" | "columns" | "insights";
 /**
  * Analysis tab group — Data health, Findings, Columns, and AI insights share
  * one tab strip, kept separate from the Original/Changes/Cleaned data views
- * below. All panels stay mounted (hidden, not unmounted) so switching tabs
- * never discards a generated AI summary or the user's finding selections.
+ * below. Stateful panels stay mounted (hidden, not unmounted) so switching
+ * tabs never discards a generated AI summary or the user's finding
+ * selections; the stateless ColumnsPanel mounts on demand (see below).
  */
 export function AnalysisPanel({
   score,
@@ -93,11 +94,10 @@ export function AnalysisPanel({
           findingColumns={findingColumns}
         />
       </div>
-      {/* Columns re-profiles on demand only while visible-ish; the memo inside
-          recomputes when the working table changes. */}
-      <div className={tab === "columns" ? "" : "hidden"}>
-        <ColumnsPanel table={table} profile={profile} />
-      </div>
+      {/* ColumnsPanel is stateless and its stats pass is a full table scan,
+          so it mounts only while its tab is open — a hidden mount would
+          re-profile 100k-row files on every edit for users who never look. */}
+      {tab === "columns" && <ColumnsPanel table={table} profile={profile} />}
       {/* AI insights temporarily disabled — re-enable with the import + tab above.
       <div className={tab === "insights" ? "" : "hidden"}>
         <AiSummary profile={profile} result={result} />
