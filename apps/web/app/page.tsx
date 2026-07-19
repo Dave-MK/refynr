@@ -33,8 +33,9 @@ import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
 import { DatasetDiff } from "@/components/DatasetDiff";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
-import { downloadCsv, toTsv } from "@/lib/csv";
+import { downloadBlob, downloadCsv, downloadJson, downloadTsv, toTsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
+import { downloadReportPdf } from "@/lib/pdf";
 import { SAMPLE_DATA } from "@/lib/sample";
 
 /** Stable identity for a finding across re-cleanses (rule + optional column). */
@@ -49,6 +50,73 @@ function applyManualEdits(base: Table, edits: Map<string, CellValue>): Table {
     if (row && c! < row.length) row[c!] = value;
   }
   return { headers: base.headers, rows };
+}
+
+const DOWNLOAD_FORMATS = [
+  ["csv", "CSV", ".csv — opens anywhere, keeps it simple"],
+  ["xlsx", "Excel", ".xlsx — a ready-to-use workbook"],
+  ["tsv", "TSV", ".tsv — tab-separated plain text"],
+  ["json", "JSON", ".json — records for code and APIs"],
+] as const;
+
+const REPORT_FORMATS = [
+  ["pdf", "PDF", ".pdf — print-ready, share anywhere"],
+  ["html", "Web page", ".html — email or share as-is"],
+  ["md", "Markdown", ".md — docs, GitHub, wikis"],
+  ["json", "JSON", ".json — pipelines and tooling"],
+] as const;
+
+/** A ▾ button opening an upward format chooser — Download and Report share it. */
+function ExportMenu<T extends string>({
+  label,
+  title,
+  open,
+  onToggle,
+  options,
+  onPick,
+}: {
+  label: string;
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  options: ReadonlyArray<readonly [T, string, string]>;
+  onPick: (format: T) => void;
+}) {
+  return (
+    <div className="relative">
+      <button
+        onClick={(e) => {
+          e.stopPropagation(); // keep the outside-click closer from firing
+          onToggle();
+        }}
+        title={title}
+        className={`rounded-lg border px-5 py-2 text-sm font-medium transition ${
+          open
+            ? "border-teal/50 bg-teal/10 text-teal"
+            : "border-line2 bg-card2 text-body hover:border-mut"
+        }`}
+      >
+        {label} ▾
+      </button>
+      {open && (
+        <div
+          className="absolute bottom-full left-0 z-40 mb-2 w-56 overflow-hidden rounded-xl border border-line2 bg-card shadow-[0_8px_30px_rgba(0,0,0,0.4)]"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {options.map(([format, name, hint]) => (
+            <button
+              key={format}
+              onClick={() => onPick(format)}
+              className="block w-full px-4 py-2.5 text-left transition hover:bg-teal/10"
+            >
+              <span className="block text-sm font-medium text-body">{name}</span>
+              <span className="block font-mono text-[10.5px] text-dim">{hint}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -113,8 +181,8 @@ export default function Home() {
   const [undoDepth, setUndoDepth] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  // The Report button's format chooser (md / html / json).
-  const [showReportMenu, setShowReportMenu] = useState(false);
+  // Which export chooser is open — the Download or Report format menu.
+  const [openMenu, setOpenMenu] = useState<null | "download" | "report">(null);
   const [toast, setToast] = useState<{ message: string; undoable: boolean } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -600,31 +668,47 @@ export default function Home() {
   // review — the shareable "show me what you did" artefact. The user picks the
   // format from a chooser on the Report button (no silent default).
   const downloadReport = useCallback(
-    (format: "md" | "html" | "json") => {
+    (format: "pdf" | "html" | "md" | "json") => {
       if (!result) return;
       const report = buildReport(result, accepted.ids);
       const title = "refynr cleaning report";
       const timestamp = new Date().toLocaleString("en-GB");
-      const [content, mime, filename] =
-        format === "md"
-          ? [reportToMarkdown(report, { title, timestamp }), "text/markdown;charset=utf-8", "refynr-report.md"]
-          : format === "html"
-            ? [reportToHtml(report, { title, timestamp }), "text/html;charset=utf-8", "refynr-report.html"]
-            : [
-                JSON.stringify({ title, generated: timestamp, ...report }, null, 2),
-                "application/json;charset=utf-8",
-                "refynr-report.json",
-              ];
-      const blob = new Blob([content], { type: mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-      setShowReportMenu(false);
+      if (format === "pdf") {
+        void downloadReportPdf(report, { title, timestamp }, "refynr-report.pdf");
+      } else if (format === "html") {
+        downloadBlob(
+          reportToHtml(report, { title, timestamp }),
+          "text/html;charset=utf-8",
+          "refynr-report.html",
+        );
+      } else if (format === "md") {
+        downloadBlob(
+          reportToMarkdown(report, { title, timestamp }),
+          "text/markdown;charset=utf-8",
+          "refynr-report.md",
+        );
+      } else {
+        downloadBlob(
+          JSON.stringify({ title, generated: timestamp, ...report }, null, 2),
+          "application/json;charset=utf-8",
+          "refynr-report.json",
+        );
+      }
+      setOpenMenu(null);
     },
     [result, accepted],
+  );
+
+  // Download the cleaned dataset — one button, every format it can export in.
+  const downloadData = useCallback(
+    (format: "csv" | "xlsx" | "tsv" | "json") => {
+      if (format === "csv") downloadCsv(cleaned, "refynr-cleaned.csv");
+      else if (format === "xlsx") void downloadXlsx(cleaned, "refynr-cleaned.xlsx");
+      else if (format === "tsv") downloadTsv(cleaned, "refynr-cleaned.tsv");
+      else downloadJson(cleaned, "refynr-cleaned.json");
+      setOpenMenu(null);
+    },
+    [cleaned],
   );
 
   // Copy the cleaned table to the clipboard as TSV — paste straight back into
@@ -792,13 +876,13 @@ export default function Home() {
     return () => window.removeEventListener("paste", onPaste);
   }, [base, analyse]);
 
-  // Close the report format chooser on any outside click.
+  // Close the open export chooser on any outside click.
   useEffect(() => {
-    if (!showReportMenu) return;
-    const close = () => setShowReportMenu(false);
+    if (!openMenu) return;
+    const close = () => setOpenMenu(null);
     window.addEventListener("click", close);
     return () => window.removeEventListener("click", close);
-  }, [showReportMenu]);
+  }, [openMenu]);
 
   // Close the settings modal on Escape.
   useEffect(() => {
@@ -1185,57 +1269,22 @@ export default function Home() {
             >
               {copied ? "✓ Copied" : "Copy"}
             </button>
-            <button
-              onClick={() => downloadCsv(cleaned, "refynr-cleaned.csv")}
-              className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
-            >
-              Download CSV
-            </button>
-            <button
-              onClick={() => void downloadXlsx(cleaned, "refynr-cleaned.xlsx")}
-              className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
-            >
-              Download Excel
-            </button>
-            <div className="relative">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation(); // keep the outside-click closer from firing
-                  setShowReportMenu((v) => !v);
-                }}
-                title="Download an audit report of what changed — choose the format"
-                className={`rounded-lg border px-5 py-2 text-sm font-medium transition ${
-                  showReportMenu
-                    ? "border-teal/50 bg-teal/10 text-teal"
-                    : "border-line2 bg-card2 text-body hover:border-mut"
-                }`}
-              >
-                Report ▾
-              </button>
-              {showReportMenu && (
-                <div
-                  className="absolute bottom-full left-0 z-40 mb-2 w-52 overflow-hidden rounded-xl border border-line2 bg-card shadow-[0_8px_30px_rgba(0,0,0,0.4)]"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {(
-                    [
-                      ["md", "Markdown", ".md — docs, GitHub, wikis"],
-                      ["html", "Web page", ".html — email or share as-is"],
-                      ["json", "JSON", ".json — pipelines and tooling"],
-                    ] as const
-                  ).map(([format, name, hint]) => (
-                    <button
-                      key={format}
-                      onClick={() => downloadReport(format)}
-                      className="block w-full px-4 py-2.5 text-left transition hover:bg-teal/10"
-                    >
-                      <span className="block text-sm font-medium text-body">{name}</span>
-                      <span className="block font-mono text-[10.5px] text-dim">{hint}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <ExportMenu
+              label="Download"
+              title="Download the cleaned data — choose the format"
+              open={openMenu === "download"}
+              onToggle={() => setOpenMenu((m) => (m === "download" ? null : "download"))}
+              options={DOWNLOAD_FORMATS}
+              onPick={downloadData}
+            />
+            <ExportMenu
+              label="Report"
+              title="Download an audit report of what changed — choose the format"
+              open={openMenu === "report"}
+              onToggle={() => setOpenMenu((m) => (m === "report" ? null : "report"))}
+              options={REPORT_FORMATS}
+              onPick={downloadReport}
+            />
             <button
               onClick={() => compareInput.current?.click()}
               title="Compare this dataset against another version"

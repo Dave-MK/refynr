@@ -27,16 +27,32 @@ export function toTsv(table: Table): string {
   return lines.join("\n");
 }
 
-export function downloadCsv(table: Table, filename: string): void {
-  // BOM so Excel opens the file as UTF-8 instead of mangling accents.
-  const BOM = String.fromCharCode(0xfeff);
-  const blob = new Blob([BOM + toCsv(table)], {
-    type: "text/csv;charset=utf-8",
-  });
+/** Trigger a browser download of `content` as `filename`. */
+export function downloadBlob(content: string, mime: string, filename: string): void {
+  const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+export function downloadCsv(table: Table, filename: string): void {
+  // BOM so Excel opens the file as UTF-8 instead of mangling accents.
+  const BOM = String.fromCharCode(0xfeff);
+  downloadBlob(BOM + toCsv(table), "text/csv;charset=utf-8", filename);
+}
+
+export function downloadTsv(table: Table, filename: string): void {
+  const BOM = String.fromCharCode(0xfeff);
+  downloadBlob(BOM + toTsv(table), "text/tab-separated-values;charset=utf-8", filename);
+}
+
+/** Rows as an array of objects keyed by header — numbers and nulls preserved. */
+export function downloadJson(table: Table, filename: string): void {
+  const rows = table.rows.map((row) =>
+    Object.fromEntries(table.headers.map((h, i) => [h, row[i] ?? null])),
+  );
+  downloadBlob(JSON.stringify(rows, null, 2), "application/json;charset=utf-8", filename);
 }
