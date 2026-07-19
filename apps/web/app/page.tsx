@@ -41,6 +41,11 @@ import { SAMPLE_DATA } from "@/lib/sample";
 /** Stable identity for a finding across re-cleanses (rule + optional column). */
 const findingKey = (f: Finding): string => `${f.rule}:${f.column ?? ""}`;
 
+/** Above this row count, re-analysis after an edit/option/transform runs in
+ *  the worker (async, UI stays live) instead of synchronously on the main
+ *  thread — a 100k-row cleanse takes seconds and would freeze the page. */
+const ASYNC_CLEANSE_ROWS = 20_000;
+
 function applyManualEdits(base: Table, edits: Map<string, CellValue>): Table {
   if (edits.size === 0) return base;
   const rows = base.rows.map((r) => [...r]);
@@ -137,6 +142,17 @@ export default function Home() {
   // When the current base table was analysed — the timestamp the Change
   // history tab stamps on app-applied fixes (they apply at analysis time).
   const [analysedAt, setAnalysedAt] = useState(0);
+  // Async re-analysis for big tables (see ASYNC_CLEANSE_ROWS): the latest
+  // worker result, the in-flight status line, and a nonce so a stale response
+  // can never overwrite a newer edit's result.
+  const [asyncResult, setAsyncResult] = useState<{ nonce: number; result: CleanseResult } | null>(null);
+  const [recleansing, setRecleansing] = useState<string | null>(null);
+  const recleanseNonce = useRef(0);
+  const recleanseIntent = useRef<
+    | null
+    | { nonce: number; kind: "edit" }
+    | { nonce: number; kind: "transform"; table: Table; label: string }
+  >(null);
   // Version-comparison state — a second file to diff the loaded one against.
   const [baseName, setBaseName] = useState("data");
   const [compareTable, setCompareTable] = useState<Table | null>(null);
@@ -190,6 +206,11 @@ export default function Home() {
   const workerRef = useRef<Worker | null>(null);
   const pendingName = useRef("data");
   const pendingCompareName = useRef("comparison");
+  // Per-stream load nonces: a response from an older load that finishes after
+  // a newer one started is dropped, so it can't clobber the newer data or
+  // mislabel it with the newer file's name.
+  const mainLoadNonce = useRef(0);
+  const compareLoadNonce = useRef(0);
 
   useEffect(() => {
     const worker = new Worker(
@@ -201,6 +222,35 @@ export default function Home() {
         setProgressStage(msg.stage);
         return;
       }
+      if (msg.tag === "recleanse") {
+        const intent = recleanseIntent.current;
+        if (!msg.ok) {
+          setRecleansing(null);
+          setError(`Couldn't re-analyse the data: ${msg.error}`);
+          return;
+        }
+        // A newer edit/transform superseded this response — drop it.
+        if (!intent || msg.nonce !== intent.nonce) return;
+        recleanseIntent.current = null;
+        setRecleansing(null);
+        if (intent.kind === "transform") {
+          setBase({ table: intent.table, result: msg.result });
+          setAnalysedAt(Date.now());
+          setManualEdits(new Map());
+          setAsyncResult(null);
+          setPinnedKeys(new Set());
+          setHoverKeys(null);
+          setScrollToKey(null);
+          showToast(intent.label);
+        } else {
+          setAsyncResult({ nonce: msg.nonce, result: msg.result });
+        }
+        return;
+      }
+      // Stale response from a superseded load — ignore it entirely.
+      const expected =
+        msg.tag === "compare" ? compareLoadNonce.current : mainLoadNonce.current;
+      if (msg.nonce !== undefined && msg.nonce !== expected) return;
       setBusy(false);
       setProgressStage(null);
       if (!msg.ok) {
@@ -220,6 +270,9 @@ export default function Home() {
       setBase({ table: msg.table, result: msg.result });
       setBaseName(pendingName.current);
       setAnalysedAt(Date.now());
+      setAsyncResult(null);
+      setRecleansing(null);
+      recleanseIntent.current = null;
       setManualEdits(new Map());
       setDisabled(new Set());
       setOptions({});
@@ -244,7 +297,11 @@ export default function Home() {
   const submit = useCallback((request: CleanseRequest, transfer?: Transferable[]) => {
     setBusy(true);
     setError(null);
-    workerRef.current?.postMessage(request, transfer ?? []);
+    const nonce =
+      "tag" in request && request.tag === "compare"
+        ? ++compareLoadNonce.current
+        : ++mainLoadNonce.current;
+    workerRef.current?.postMessage({ ...request, nonce }, transfer ?? []);
   }, []);
 
   const analyse = useCallback(
@@ -309,16 +366,37 @@ export default function Home() {
     options.dedupeKey?.length
   );
 
-  // Re-cleanse on the main thread once the user has made manual edits or set
-  // engine options, so the score, findings and cleaned output all update live.
-  // The initial (unedited, default-options) result comes from the worker so
-  // large files never block the first paint.
+  // Re-cleanse once the user has made manual edits or set engine options, so
+  // the score, findings and cleaned output all update live. Small tables
+  // re-cleanse synchronously (instant); big tables go through the worker (the
+  // effect below) and serve the previous result until the fresh one lands —
+  // a beat of staleness beats seconds of frozen UI.
+  const isBig = (base?.table.rows.length ?? 0) > ASYNC_CLEANSE_ROWS;
+  const needsRecleanse = manualEdits.size > 0 || hasOptions;
+
   const result = useMemo(() => {
     if (!base) return null;
-    return manualEdits.size === 0 && !hasOptions
-      ? base.result
-      : cleanse(working!, options);
-  }, [base, manualEdits, working, options, hasOptions]);
+    if (!needsRecleanse) return base.result;
+    if (isBig) return asyncResult?.result ?? base.result;
+    return cleanse(working!, options);
+  }, [base, needsRecleanse, isBig, asyncResult, working, options]);
+
+  // Drive the worker for big-table re-analysis. The nonce makes the latest
+  // request win: a stale response is dropped in the worker handler above.
+  useEffect(() => {
+    if (!isBig || !working) return;
+    if (!needsRecleanse) {
+      recleanseIntent.current = null;
+      setRecleansing(null);
+      return;
+    }
+    const nonce = ++recleanseNonce.current;
+    recleanseIntent.current = { nonce, kind: "edit" };
+    setRecleansing(
+      `Re-analysing ${working.rows.length.toLocaleString("en-GB")} rows after your change…`,
+    );
+    workerRef.current?.postMessage({ kind: "recleanse", table: working, options, nonce });
+  }, [isBig, needsRecleanse, working, options]);
 
   // Which finding indices are currently accepted (fixable, not un-ticked, and
   // not left un-accepted by a recipe's skip list).
@@ -404,6 +482,12 @@ export default function Home() {
   );
 
   const restore = useCallback((prev: (typeof undoStack.current)[number]) => {
+    // Invalidate any in-flight big-table re-analysis — its result would be
+    // for a state that no longer exists.
+    recleanseNonce.current++;
+    recleanseIntent.current = null;
+    setRecleansing(null);
+    setAsyncResult(null);
     setBase(prev.base);
     setBaseName(prev.baseName);
     setAnalysedAt(prev.analysedAt);
@@ -469,6 +553,17 @@ export default function Home() {
         return;
       }
       snapshot(label);
+      if (next.rows.length > ASYNC_CLEANSE_ROWS) {
+        // Big table: analyse the reshaped data in the worker; the base swaps
+        // in when the result lands so the UI never freezes.
+        const nonce = ++recleanseNonce.current;
+        recleanseIntent.current = { nonce, kind: "transform", table: next, label };
+        setRecleansing(
+          `${label} — re-analysing ${next.rows.length.toLocaleString("en-GB")} rows…`,
+        );
+        workerRef.current?.postMessage({ kind: "recleanse", table: next, options, nonce });
+        return;
+      }
       setBase({ table: next, result: cleanse(next, options) });
       setAnalysedAt(Date.now());
       setManualEdits(new Map());
@@ -638,8 +733,9 @@ export default function Home() {
       setOptions(recipe.options);
       setSkipRules(new Set(recipe.skipRules));
       setDisabled(new Set()); // recipe defines the accept/skip state
+      showToast(`Applied recipe "${recipe.name}"`);
     },
-    [snapshot],
+    [snapshot, showToast],
   );
 
   // The rules currently left un-accepted — a recipe's skips plus any finding
@@ -1028,6 +1124,13 @@ export default function Home() {
             </p>
           )}
 
+          {recleansing && !busy && (
+            <p className="animate-pulse rounded-lg border border-line bg-card px-4 py-3 font-mono text-sm text-teal">
+              › {recleansing} — you can keep working, the score and findings will
+              refresh in a moment.
+            </p>
+          )}
+
           {sheets.length > 1 && (
             <p className="flex flex-wrap items-center gap-2 rounded-lg border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-body">
               <span>
@@ -1088,6 +1191,10 @@ export default function Home() {
             </span>
           </div>
 
+          {/* Two-pane on wide screens: analysis (sticky) beside the data area.
+              Below xl the columns would crowd the grid, so they stack. */}
+          <div className="space-y-5 xl:grid xl:grid-cols-[440px_minmax(0,1fr)] xl:items-start xl:gap-6 xl:space-y-0">
+          <div className="space-y-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto">
           <AnalysisPanel
             score={result.score}
             projected={result.projectedScore}
@@ -1102,7 +1209,9 @@ export default function Home() {
             profile={result.profile}
             result={result}
           />
+          </div>
 
+          <div className="min-w-0 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex rounded-xl border border-line bg-inset p-1">
@@ -1311,6 +1420,8 @@ export default function Home() {
               : "Amber cells in Changes are advisory — edit them to fix by hand and watch the score update. "}
             Your original data is never modified — refynr only ever exports a copy.
           </p>
+          </div>
+          </div>
         </div>
       )}
 

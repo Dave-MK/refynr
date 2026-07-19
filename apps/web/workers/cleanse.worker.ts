@@ -4,20 +4,24 @@ import {
   fromJson,
   type CellValue,
   type CleanseResult,
+  type EngineOptions,
   type Table,
 } from "@refynr/engine";
 import * as XLSX from "xlsx";
 import { parquetMetadataAsync, parquetReadObjects } from "hyparquet";
 
 /** "main" runs the full cleanse; "compare" only parses the file to a Table
- *  (for the version-diff view) without re-running analysis. */
-type Tag = "main" | "compare";
+ *  (for the version-diff view) without re-running analysis; "recleanse"
+ *  re-analyses an already-parsed table (big-table edits/options/transforms)
+ *  off the main thread so the UI never freezes. */
+type Tag = "main" | "compare" | "recleanse";
 
 export type CleanseRequest =
-  | { kind: "text"; text: string; tag?: Tag }
-  | { kind: "json"; text: string; tag?: Tag }
-  | { kind: "xlsx"; buffer: ArrayBuffer; name: string; tag?: Tag; sheet?: number }
-  | { kind: "parquet"; buffer: ArrayBuffer; name: string; tag?: Tag };
+  | { kind: "text"; text: string; tag?: Tag; nonce?: number }
+  | { kind: "json"; text: string; tag?: Tag; nonce?: number }
+  | { kind: "xlsx"; buffer: ArrayBuffer; name: string; tag?: Tag; sheet?: number; nonce?: number }
+  | { kind: "parquet"; buffer: ArrayBuffer; name: string; tag?: Tag; nonce?: number }
+  | { kind: "recleanse"; table: Table; options: EngineOptions; nonce: number };
 
 /** Streamed while a big file loads, so the UI can show live progress
  *  ("Analysing 100,000 rows…") instead of a frozen button label. */
@@ -37,9 +41,13 @@ export type CleanseResponse =
       sheets?: string[];
       /** Set when the source had more rows than we loaded this session. */
       truncated?: { shown: number; total: number };
+      /** Echoed from the request so a stale response (an older load finishing
+       *  after a newer one started) can be dropped instead of clobbering it. */
+      nonce?: number;
     }
-  | { ok: true; tag: "compare"; table: Table }
-  | { ok: false; tag: Tag; error: string };
+  | { ok: true; tag: "compare"; table: Table; nonce?: number }
+  | { ok: true; tag: "recleanse"; result: CleanseResult; nonce: number }
+  | { ok: false; tag: Tag; error: string; nonce?: number };
 
 export type WorkerMessage = CleanseResponse | ProgressMessage;
 
@@ -138,7 +146,26 @@ async function tableFromParquet(
 }
 
 self.onmessage = async (e: MessageEvent<CleanseRequest>) => {
+  if (e.data.kind === "recleanse") {
+    try {
+      const result = cleanse(e.data.table, e.data.options);
+      postMessage({
+        ok: true,
+        tag: "recleanse",
+        result,
+        nonce: e.data.nonce,
+      } satisfies CleanseResponse);
+    } catch (err) {
+      postMessage({
+        ok: false,
+        tag: "recleanse",
+        error: err instanceof Error ? err.message : String(err),
+      } satisfies CleanseResponse);
+    }
+    return;
+  }
   const tag: Tag = e.data.tag ?? "main";
+  const nonce = e.data.nonce;
   try {
     let table: Table;
     let sheetName: string | undefined;
@@ -169,7 +196,7 @@ self.onmessage = async (e: MessageEvent<CleanseRequest>) => {
     }
 
     if (tag === "compare") {
-      postMessage({ ok: true, tag: "compare", table } satisfies CleanseResponse);
+      postMessage({ ok: true, tag: "compare", table, nonce } satisfies CleanseResponse);
       return;
     }
 
@@ -183,12 +210,14 @@ self.onmessage = async (e: MessageEvent<CleanseRequest>) => {
       sheetName,
       sheets,
       truncated,
+      nonce,
     } satisfies CleanseResponse);
   } catch (err) {
     postMessage({
       ok: false,
       tag,
       error: err instanceof Error ? err.message : String(err),
+      nonce,
     } satisfies CleanseResponse);
   }
 };

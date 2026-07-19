@@ -52,7 +52,7 @@ export function ScoreCard({
 }) {
   const delta = projected.overall - score.overall;
   return (
-    <section className="rounded-2xl border border-line bg-card p-6">
+    <section className="@container rounded-2xl border border-line bg-card p-6">
       <div className="mb-6 flex items-center justify-between">
         <h2 className="label">Data health</h2>
         {delta > 0 && (
@@ -61,7 +61,9 @@ export function ScoreCard({
           </span>
         )}
       </div>
-      <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 sm:flex-row">
+      {/* Container query, not viewport: in the xl two-pane layout this card
+          sits in a 440px sidebar and must stack even on a wide screen. */}
+      <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 @xl:flex-row">
         <div className="flex items-center gap-6">
           <Ring score={score.overall} label="now" />
           <Ring score={projected.overall} label="after fixes" glow />
