@@ -116,3 +116,74 @@ export function reportToMarkdown(
 
   return lines.join("\n");
 }
+
+const esc = (s: string): string =>
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+/** Render a report as a self-contained shareable HTML document (inline styles,
+ *  no external assets — safe to email or drop on a shared drive). Same content
+ *  as the Markdown rendering; `timestamp` is supplied by the caller. */
+export function reportToHtml(
+  report: RunReport,
+  opts: { title?: string; timestamp?: string } = {},
+): string {
+  const title = esc(opts.title ?? "refynr cleaning report");
+  const th = 'style="text-align:left;padding:6px 10px;border-bottom:2px solid #ccc"';
+  const thNum = 'style="text-align:right;padding:6px 10px;border-bottom:2px solid #ccc"';
+  const td = 'style="padding:6px 10px;border-bottom:1px solid #e5e5e5"';
+  const tdNum = 'style="padding:6px 10px;border-bottom:1px solid #e5e5e5;text-align:right"';
+
+  const parts: string[] = [
+    "<!doctype html>",
+    `<html lang="en"><head><meta charset="utf-8"><title>${title}</title></head>`,
+    '<body style="font-family:system-ui,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;color:#1a1a1a">',
+    `<h1 style="font-size:1.5rem">${title}</h1>`,
+  ];
+  if (opts.timestamp) {
+    parts.push(`<p style="color:#666"><em>Generated ${esc(opts.timestamp)}</em></p>`);
+  }
+
+  parts.push(
+    '<h2 style="font-size:1.15rem">Summary</h2>',
+    "<ul>",
+    `<li><strong>Health score:</strong> ${report.scoreBefore} → ${report.scoreProjected} (if all fixes accepted)</li>`,
+    `<li><strong>Rows:</strong> ${report.rowsBefore} → ${report.rowsAfter} (${report.rowsRemoved} removed)</li>`,
+    `<li><strong>Cells changed:</strong> ${report.cellsChanged}</li>`,
+    `<li><strong>Headers changed:</strong> ${report.headersChanged}</li>`,
+    `<li><strong>Fixes applied:</strong> ${report.patchesApplied} of ${report.patchesProposed} proposed</li>`,
+    "</ul>",
+  );
+
+  if (report.applied.length > 0) {
+    parts.push(
+      '<h2 style="font-size:1.15rem">Changes applied</h2>',
+      '<table style="border-collapse:collapse;width:100%">',
+      `<thead><tr><th ${th}>Rule</th><th ${thNum}>Count</th><th ${th}>Example reason</th></tr></thead><tbody>`,
+    );
+    for (const a of report.applied) {
+      parts.push(
+        `<tr><td ${td}>${esc(a.rule)}</td><td ${tdNum}>${a.count}</td><td ${td}>${esc(a.sample)}</td></tr>`,
+      );
+    }
+    parts.push("</tbody></table>");
+  }
+
+  if (report.advisories.length > 0) {
+    parts.push(
+      '<h2 style="font-size:1.15rem">Flagged for review (not auto-fixed)</h2>',
+      '<table style="border-collapse:collapse;width:100%">',
+      `<thead><tr><th ${th}>Finding</th><th ${thNum}>Count</th></tr></thead><tbody>`,
+    );
+    for (const a of report.advisories) {
+      parts.push(`<tr><td ${td}>${esc(a.title)}</td><td ${tdNum}>${a.count}</td></tr>`);
+    }
+    parts.push("</tbody></table>");
+  }
+
+  parts.push("</body></html>");
+  return parts.join("\n");
+}

@@ -5,8 +5,11 @@ import {
   applyPatches,
   buildReport,
   cleanse,
+  deleteColumn,
+  deleteRows,
   findReplace,
   mergeColumns,
+  reportToHtml,
   reportToMarkdown,
   splitColumn,
   suggestConstraints,
@@ -24,6 +27,7 @@ import type {
   WorkerMessage,
 } from "@/workers/cleanse.worker";
 import { AuthNav } from "@/components/AuthNav";
+import { ChangeHistory } from "@/components/ChangeHistory";
 import { Landing } from "@/components/Landing";
 import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
@@ -62,6 +66,9 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   // Set when a large source (e.g. Parquet) was loaded as a capped preview.
   const [truncated, setTruncated] = useState<{ shown: number; total: number } | null>(null);
+  // When the current base table was analysed — the timestamp the Change
+  // history tab stamps on app-applied fixes (they apply at analysis time).
+  const [analysedAt, setAnalysedAt] = useState(0);
   // Version-comparison state — a second file to diff the loaded one against.
   const [baseName, setBaseName] = useState("data");
   const [compareTable, setCompareTable] = useState<Table | null>(null);
@@ -92,8 +99,11 @@ export default function Home() {
   const undoStack = useRef<
     {
       label: string;
+      /** When the action happened — feeds the Change history tab. */
+      at: number;
       base: { table: Table; result: CleanseResult } | null;
       baseName: string;
+      analysedAt: number;
       disabled: Set<string>;
       skipRules: Set<string>;
       options: EngineOptions;
@@ -102,6 +112,9 @@ export default function Home() {
   >([]);
   const [undoDepth, setUndoDepth] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  // The Report button's format chooser (md / html / json).
+  const [showReportMenu, setShowReportMenu] = useState(false);
   const [toast, setToast] = useState<{ message: string; undoable: boolean } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -138,6 +151,7 @@ export default function Home() {
       }
       setBase({ table: msg.table, result: msg.result });
       setBaseName(pendingName.current);
+      setAnalysedAt(Date.now());
       setManualEdits(new Map());
       setDisabled(new Set());
       setOptions({});
@@ -306,8 +320,10 @@ export default function Home() {
     (label: string) => {
       undoStack.current.push({
         label,
+        at: Date.now(),
         base,
         baseName,
+        analysedAt,
         disabled: new Set(disabled),
         skipRules: new Set(skipRules),
         options,
@@ -316,12 +332,13 @@ export default function Home() {
       if (undoStack.current.length > 50) undoStack.current.shift();
       setUndoDepth(undoStack.current.length);
     },
-    [base, baseName, disabled, skipRules, options, manualEdits],
+    [base, baseName, analysedAt, disabled, skipRules, options, manualEdits],
   );
 
   const restore = useCallback((prev: (typeof undoStack.current)[number]) => {
     setBase(prev.base);
     setBaseName(prev.baseName);
+    setAnalysedAt(prev.analysedAt);
     setDisabled(prev.disabled);
     setSkipRules(prev.skipRules);
     setOptions(prev.options);
@@ -385,6 +402,7 @@ export default function Home() {
       }
       snapshot(label);
       setBase({ table: next, result: cleanse(next, options) });
+      setAnalysedAt(Date.now());
       setManualEdits(new Map());
       setPinnedKeys(new Set());
       setHoverKeys(null);
@@ -426,6 +444,31 @@ export default function Home() {
       );
     },
     [applyTransform],
+  );
+
+  // Row/column deletion (from the ✕ buttons in the Changes and Cleaned views).
+  // Shape changes like any other transform: baked into a new base, undoable.
+  const onDeleteRow = useCallback(
+    (row: number) => {
+      applyTransform(
+        (t) => deleteRows(t, [row]),
+        `Deleted row ${row + 2}`,
+        "That row no longer exists.",
+      );
+    },
+    [applyTransform],
+  );
+
+  const onDeleteColumn = useCallback(
+    (col: number) => {
+      const name = base?.table.headers[col] ?? "column";
+      applyTransform(
+        (t) => deleteColumn(t, col),
+        `Deleted column "${name}"`,
+        "Can't delete the only remaining column.",
+      );
+    },
+    [applyTransform, base],
   );
 
   // ── Find & replace ────────────────────────────────────────────────────────
@@ -546,23 +589,43 @@ export default function Home() {
   const acceptedCount = accepted.cellPatches.size + accepted.removedRows.size + accepted.headerPatches.size;
   const manualCount = manualEdits.size;
 
-  // Download a Markdown audit report of exactly what was changed and what's
-  // left for review — the shareable "show me what you did" artefact.
-  const downloadReport = useCallback(() => {
-    if (!result) return;
-    const report = buildReport(result, accepted.ids);
-    const md = reportToMarkdown(report, {
-      title: "refynr cleaning report",
-      timestamp: new Date().toLocaleString("en-GB"),
-    });
-    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "refynr-report.md";
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [result, accepted]);
+  // The accepted patches as a list — each is an app-applied change the
+  // Change history tab logs (with the analysis timestamp).
+  const acceptedPatches = useMemo(
+    () => (result ? result.patches.filter((p) => accepted.ids.has(p.id)) : []),
+    [result, accepted],
+  );
+
+  // Download an audit report of exactly what was changed and what's left for
+  // review — the shareable "show me what you did" artefact. The user picks the
+  // format from a chooser on the Report button (no silent default).
+  const downloadReport = useCallback(
+    (format: "md" | "html" | "json") => {
+      if (!result) return;
+      const report = buildReport(result, accepted.ids);
+      const title = "refynr cleaning report";
+      const timestamp = new Date().toLocaleString("en-GB");
+      const [content, mime, filename] =
+        format === "md"
+          ? [reportToMarkdown(report, { title, timestamp }), "text/markdown;charset=utf-8", "refynr-report.md"]
+          : format === "html"
+            ? [reportToHtml(report, { title, timestamp }), "text/html;charset=utf-8", "refynr-report.html"]
+            : [
+                JSON.stringify({ title, generated: timestamp, ...report }, null, 2),
+                "application/json;charset=utf-8",
+                "refynr-report.json",
+              ];
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setShowReportMenu(false);
+    },
+    [result, accepted],
+  );
 
   // Copy the cleaned table to the clipboard as TSV — paste straight back into
   // Excel or Google Sheets, no file download needed.
@@ -576,22 +639,45 @@ export default function Home() {
     }
   }, [cleaned]);
 
-  // Accept every fixable fix at once, or clear them all.
+  // Accept every fixable fix at once, or clear them all. When `scopeIndices`
+  // is given (a column filter is active in the findings panel), only those
+  // findings are affected — so "Accept all" can never touch findings the user
+  // has filtered out of view.
   const onSetAll = useCallback(
-    (accept: boolean) => {
+    (accept: boolean, scopeIndices?: number[]) => {
       if (!result) return;
-      snapshot(accept ? "Accepted all fixes" : "Cleared all fixes");
+      const scoped = scopeIndices !== undefined;
+      const scopeSet = scoped ? new Set(scopeIndices) : null;
+      const verb = accept ? "Accepted" : "Cleared";
+      const label = `${verb} ${scoped ? "shown" : "all"} fixes`;
+      snapshot(label);
+
+      // Keys of the fixable findings in scope (all fixable, or just the shown).
+      const keys = new Set<string>();
+      const rules = new Set<string>();
+      result.findings.forEach((f, i) => {
+        if (f.patchIds.length === 0) return;
+        if (scopeSet && !scopeSet.has(i)) return;
+        keys.add(findingKey(f));
+        rules.add(f.rule);
+      });
+
+      setDisabled((prev) => {
+        const next = new Set(prev);
+        for (const k of keys) accept ? next.delete(k) : next.add(k);
+        return next;
+      });
       if (accept) {
-        setDisabled(new Set());
-        setSkipRules(new Set());
-      } else {
-        const all = new Set<string>();
-        result.findings.forEach((f) => {
-          if (f.patchIds.length > 0) all.add(findingKey(f));
+        // Un-skip the affected rules so a recipe's skip list can't keep a
+        // just-accepted finding un-applied.
+        setSkipRules((prev) => {
+          if (!scoped) return new Set();
+          const next = new Set(prev);
+          for (const r of rules) next.delete(r);
+          return next;
         });
-        setDisabled(all);
       }
-      showToast(accept ? "Accepted all fixes" : "Cleared all fixes");
+      showToast(label);
     },
     [result, snapshot, showToast],
   );
@@ -706,9 +792,27 @@ export default function Home() {
     return () => window.removeEventListener("paste", onPaste);
   }, [base, analyse]);
 
+  // Close the report format chooser on any outside click.
+  useEffect(() => {
+    if (!showReportMenu) return;
+    const close = () => setShowReportMenu(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [showReportMenu]);
+
+  // Close the settings modal on Escape.
+  useEffect(() => {
+    if (!showSettings) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowSettings(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showSettings]);
+
   return (
     <main
-      className="relative mx-auto max-w-[960px] px-5 py-8"
+      className="relative px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
       onDragOver={(e) => {
         e.preventDefault();
         if (!dragActive) setDragActive(true);
@@ -726,6 +830,9 @@ export default function Home() {
           </div>
         </div>
       )}
+      {/* Landing stays a comfortable reading width; once data loads the
+          workspace uses the full viewport so the grid gets real room. */}
+      <div className={base ? "w-full" : "mx-auto max-w-[960px]"}>
       <header className="mb-8 flex items-center justify-between">
         <h1 className="text-[22px] font-bold tracking-tight text-hi">
           refynr<span className="text-teal">.</span>
@@ -874,17 +981,28 @@ export default function Home() {
             </p>
           )}
 
-          <RecipeBar
-            currentOptions={options}
-            currentSkipRules={currentSkipRules}
-            columns={base.table.headers}
-            suggestions={suggestions}
-            onApplyOptions={onApplyOptions}
-            onApplyRecipe={onApplyRecipe}
-            onSplit={onSplit}
-            onMerge={onMerge}
-            onUnpivot={onUnpivot}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setShowSettings(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-line2 bg-card2 px-3.5 py-2 font-mono text-[12px] font-semibold text-body transition hover:border-mut"
+            >
+              <span aria-hidden>⚙</span>
+              Settings &amp; recipes
+              {(options.dedupeKey?.length ||
+                options.constraints?.length ||
+                options.dateOutput ||
+                options.dateOrder) && (
+                <span
+                  className="h-1.5 w-1.5 rounded-full bg-teal"
+                  title="Custom settings are active"
+                  aria-label="Custom settings active"
+                />
+              )}
+            </button>
+            <span className="font-mono text-[11px] text-dim">
+              date handling · duplicate key · column tools · recipes · expectations
+            </span>
+          </div>
 
           <AnalysisPanel
             score={result.score}
@@ -902,13 +1020,14 @@ export default function Home() {
           />
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
             <div className="inline-flex rounded-xl border border-line bg-inset p-1">
               {(
                 [
                   ["original", "Original"],
                   ["diff", `Changes · ${acceptedCount}`],
                   ["cleaned", "Cleaned"],
+                  ["history", "Change history"],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -946,52 +1065,6 @@ export default function Home() {
                 </button>
               </>
             )}
-            </div>
-            <div className="flex gap-2.5">
-              <button
-                onClick={() => void copyCleaned()}
-                title="Copy the cleaned data — paste straight into Excel or Google Sheets"
-                className="rounded-lg bg-gradient-to-r from-teal to-cyan px-5 py-2 text-sm font-semibold text-ink shadow-[0_0_18px_rgba(45,212,191,0.35)] transition hover:brightness-110"
-              >
-                {copied ? "✓ Copied" : "Copy"}
-              </button>
-              <button
-                onClick={() => downloadCsv(cleaned, "refynr-cleaned.csv")}
-                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
-              >
-                Download CSV
-              </button>
-              <button
-                onClick={() => void downloadXlsx(cleaned, "refynr-cleaned.xlsx")}
-                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
-              >
-                Download Excel
-              </button>
-              <button
-                onClick={downloadReport}
-                title="Download a Markdown audit report of what changed"
-                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
-              >
-                Report
-              </button>
-              <button
-                onClick={() => compareInput.current?.click()}
-                title="Compare this dataset against another version"
-                className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
-              >
-                ⇄ Compare
-              </button>
-              <input
-                ref={compareInput}
-                type="file"
-                accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void onCompareFile(f);
-                  e.target.value = "";
-                }}
-              />
             </div>
           </div>
 
@@ -1077,20 +1150,111 @@ export default function Home() {
             />
           )}
 
-          <DataTable
-            original={base.table}
-            working={working}
-            cleaned={cleaned}
-            cellPatches={accepted.cellPatches}
-            removedRows={accepted.removedRows}
-            editableCells={editableCells}
-            headerPatches={accepted.headerPatches}
-            mode={mode}
-            onEditCell={onEditCell}
-            highlightKeys={hoverKeys ?? pinnedKeys}
-            scrollToKey={scrollToKey}
-            scrollNonce={scrollNonce}
-          />
+          {mode === "history" ? (
+            <ChangeHistory
+              patches={acceptedPatches}
+              headers={working.headers}
+              analysedAt={analysedAt}
+              actions={undoStack.current.map((e) => ({ label: e.label, at: e.at }))}
+            />
+          ) : (
+            <DataTable
+              original={base.table}
+              working={working}
+              cleaned={cleaned}
+              cellPatches={accepted.cellPatches}
+              removedRows={accepted.removedRows}
+              editableCells={editableCells}
+              headerPatches={accepted.headerPatches}
+              mode={mode}
+              onEditCell={onEditCell}
+              onDeleteRow={onDeleteRow}
+              onDeleteColumn={onDeleteColumn}
+              highlightKeys={hoverKeys ?? pinnedKeys}
+              scrollToKey={scrollToKey}
+              scrollNonce={scrollNonce}
+            />
+          )}
+
+          {/* Export actions live under the data panel — review first, export last. */}
+          <div className="flex flex-wrap gap-2.5">
+            <button
+              onClick={() => void copyCleaned()}
+              title="Copy the cleaned data — paste straight into Excel or Google Sheets"
+              className="rounded-lg bg-gradient-to-r from-teal to-cyan px-5 py-2 text-sm font-semibold text-ink shadow-[0_0_18px_rgba(45,212,191,0.35)] transition hover:brightness-110"
+            >
+              {copied ? "✓ Copied" : "Copy"}
+            </button>
+            <button
+              onClick={() => downloadCsv(cleaned, "refynr-cleaned.csv")}
+              className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
+            >
+              Download CSV
+            </button>
+            <button
+              onClick={() => void downloadXlsx(cleaned, "refynr-cleaned.xlsx")}
+              className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
+            >
+              Download Excel
+            </button>
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation(); // keep the outside-click closer from firing
+                  setShowReportMenu((v) => !v);
+                }}
+                title="Download an audit report of what changed — choose the format"
+                className={`rounded-lg border px-5 py-2 text-sm font-medium transition ${
+                  showReportMenu
+                    ? "border-teal/50 bg-teal/10 text-teal"
+                    : "border-line2 bg-card2 text-body hover:border-mut"
+                }`}
+              >
+                Report ▾
+              </button>
+              {showReportMenu && (
+                <div
+                  className="absolute bottom-full left-0 z-40 mb-2 w-52 overflow-hidden rounded-xl border border-line2 bg-card shadow-[0_8px_30px_rgba(0,0,0,0.4)]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {(
+                    [
+                      ["md", "Markdown", ".md — docs, GitHub, wikis"],
+                      ["html", "Web page", ".html — email or share as-is"],
+                      ["json", "JSON", ".json — pipelines and tooling"],
+                    ] as const
+                  ).map(([format, name, hint]) => (
+                    <button
+                      key={format}
+                      onClick={() => downloadReport(format)}
+                      className="block w-full px-4 py-2.5 text-left transition hover:bg-teal/10"
+                    >
+                      <span className="block text-sm font-medium text-body">{name}</span>
+                      <span className="block font-mono text-[10.5px] text-dim">{hint}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => compareInput.current?.click()}
+              title="Compare this dataset against another version"
+              className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
+            >
+              ⇄ Compare
+            </button>
+            <input
+              ref={compareInput}
+              type="file"
+              accept=".csv,.tsv,.txt,.xlsx,.xls,.json,.parquet"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void onCompareFile(f);
+                e.target.value = "";
+              }}
+            />
+          </div>
 
           <p className="pb-8 text-center font-mono text-[11px] leading-relaxed text-dim">
             {manualCount > 0
@@ -1123,6 +1287,58 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      {showSettings && base && (
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/70 p-4 backdrop-blur-sm sm:p-8"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Settings and recipes"
+          onClick={() => setShowSettings(false)}
+        >
+          <div
+            className="relative my-auto w-full max-w-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="label text-teal!">Settings &amp; recipes</h2>
+              <button
+                onClick={() => setShowSettings(false)}
+                aria-label="Close settings"
+                className="rounded-lg border border-line2 bg-card px-3 py-1.5 font-mono text-[12px] text-mut transition hover:text-body"
+              >
+                ✕ Close
+              </button>
+            </div>
+            {/* Option toggles keep the modal open for further tweaking;
+                reshapes and recipe-apply close it so the result is visible. */}
+            <RecipeBar
+              currentOptions={options}
+              currentSkipRules={currentSkipRules}
+              columns={base.table.headers}
+              suggestions={suggestions}
+              onApplyOptions={onApplyOptions}
+              onApplyRecipe={(r) => {
+                onApplyRecipe(r);
+                setShowSettings(false);
+              }}
+              onSplit={(c, s) => {
+                onSplit(c, s);
+                setShowSettings(false);
+              }}
+              onMerge={(c, s) => {
+                onMerge(c, s);
+                setShowSettings(false);
+              }}
+              onUnpivot={(c) => {
+                onUnpivot(c);
+                setShowSettings(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
+      </div>
     </main>
   );
 }

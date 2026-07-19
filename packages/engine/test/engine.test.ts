@@ -5,6 +5,8 @@ import {
   checkConstraints,
   cleanse,
   createRecipe,
+  deleteColumn,
+  deleteRows,
   diffTables,
   findReplace,
   fromDelimitedText,
@@ -16,6 +18,7 @@ import {
   unpivot,
   parseRecipe,
   profileTable,
+  reportToHtml,
   reportToMarkdown,
   runRecipe,
   scoreTable,
@@ -714,6 +717,45 @@ describe("unpivot (wide to long)", () => {
   });
 });
 
+describe("row and column deletion", () => {
+  const table: Table = {
+    headers: ["Name", "City", "Age"],
+    rows: [
+      ["Ann", "Leeds", 34],
+      ["Bob", "York", 41],
+      ["Cat", "Hull", 28],
+    ],
+  };
+
+  it("deletes rows by index without mutating the input", () => {
+    const next = deleteRows(table, [1]);
+    expect(next.rows).toEqual([
+      ["Ann", "Leeds", 34],
+      ["Cat", "Hull", 28],
+    ]);
+    expect(table.rows).toHaveLength(3); // input untouched
+  });
+
+  it("ignores invalid row indices and no-ops when nothing valid is selected", () => {
+    expect(deleteRows(table, [-1, 99])).toBe(table);
+    expect(deleteRows(table, [0, 99]).rows).toHaveLength(2);
+  });
+
+  it("deletes a column from headers and every row", () => {
+    const next = deleteColumn(table, 1);
+    expect(next.headers).toEqual(["Name", "Age"]);
+    expect(next.rows[0]).toEqual(["Ann", 34]);
+    expect(table.headers).toHaveLength(3); // input untouched
+  });
+
+  it("refuses to delete the last remaining column or an invalid index", () => {
+    expect(deleteColumn(table, 5)).toBe(table);
+    const one = deleteColumn(deleteColumn(table, 2), 1);
+    expect(one.headers).toEqual(["Name"]);
+    expect(deleteColumn(one, 0)).toBe(one);
+  });
+});
+
 describe("constraint suggestions", () => {
   const table: Table = {
     headers: ["Customer ID", "Status", "Notes"],
@@ -1011,6 +1053,44 @@ describe("run report", () => {
     const md = reportToMarkdown(report, { timestamp: "2026-07-11" });
     expect(md).toContain("# refynr cleaning report");
     expect(md).toContain("Health score:");
+  });
+
+  it("renders a self-contained HTML document with escaped content", () => {
+    const table: Table = {
+      headers: ["Name", "Email"],
+      rows: [["  Ann ", "a@x.com"], ["bob", "not-an-email"]],
+    };
+    const result = cleanse(table);
+    const report = buildReport(result, new Set(result.patches.map((p) => p.id)));
+    const html = reportToHtml(report, { timestamp: "2026-07-19" });
+    expect(html).toContain("<!doctype html>");
+    expect(html).toContain("refynr cleaning report");
+    expect(html).toContain("Generated 2026-07-19");
+    expect(html).toContain("Health score:");
+  });
+
+  it("escapes HTML in reasons, titles and rule names", () => {
+    // Patch reasons can embed cell values, so hostile markup must be escaped.
+    const hostile = {
+      rowsBefore: 2,
+      rowsRemoved: 0,
+      rowsAfter: 2,
+      cellsChanged: 1,
+      headersChanged: 0,
+      scoreBefore: 90,
+      scoreProjected: 95,
+      patchesApplied: 1,
+      patchesProposed: 1,
+      applied: [
+        { rule: "whitespace", kind: "cell" as const, count: 1, sample: 'Trimmed "<script>alert(1)</script>"' },
+      ],
+      advisories: [{ rule: "email", title: "1 invalid <b>email</b>", count: 1 }],
+    };
+    const html = reportToHtml(hostile, { title: "x <img src=x>" });
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<b>email</b>");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;script&gt;");
   });
 });
 

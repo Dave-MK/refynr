@@ -118,6 +118,34 @@ export function mergeColumns(
   return { headers, rows };
 }
 
+/**
+ * Delete the given rows (by index). Invalid indices are ignored; if nothing
+ * valid is selected the input table is returned unchanged (=== identity, so
+ * shells can detect the no-op).
+ */
+export function deleteRows(table: Table, rows: number[]): Table {
+  const drop = new Set(rows.filter((r) => r >= 0 && r < table.rows.length));
+  if (drop.size === 0) return table;
+  return {
+    headers: table.headers,
+    rows: table.rows.filter((_, i) => !drop.has(i)),
+  };
+}
+
+/**
+ * Delete a single column. Refuses to delete the last remaining column (a
+ * table with no columns is meaningless) — returns the input unchanged.
+ */
+export function deleteColumn(table: Table, col: number): Table {
+  if (col < 0 || col >= table.headers.length || table.headers.length <= 1) {
+    return table;
+  }
+  return {
+    headers: table.headers.filter((_, i) => i !== col),
+    rows: table.rows.map((row) => row.filter((_, i) => i !== col)),
+  };
+}
+
 export interface UnpivotOptions {
   /** Header for the column holding the folded columns' names. Default "Field". */
   fieldName?: string;

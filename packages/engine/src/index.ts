@@ -46,6 +46,7 @@ export {
 export {
   buildReport,
   reportToMarkdown,
+  reportToHtml,
   type RunReport,
   type ReportRuleLine,
 } from "./report.js";
@@ -64,6 +65,8 @@ export {
   splitColumn,
   mergeColumns,
   unpivot,
+  deleteRows,
+  deleteColumn,
   type SplitOptions,
   type MergeOptions,
   type UnpivotOptions,

@@ -61,7 +61,7 @@ export function ScoreCard({
           </span>
         )}
       </div>
-      <div className="flex flex-col items-center gap-8 sm:flex-row">
+      <div className="mx-auto flex max-w-4xl flex-col items-center gap-8 sm:flex-row">
         <div className="flex items-center gap-6">
           <Ring score={score.overall} label="now" />
           <Ring score={projected.overall} label="after fixes" glow />

@@ -13,10 +13,12 @@ function pillFor(f: Finding): { className: string; text: string } {
   return { className: "border-coral/30 bg-coral/10 text-coral", text: "Advisory" };
 }
 
-const DOT: Record<Finding["severity"], string> = {
-  error: "bg-coral",
-  warning: "bg-amber",
-  info: "bg-cyan",
+/** Severity as a left edge stripe on each finding row — denser than a boxed
+ *  dot, and readable at a glance down the list. */
+const STRIPE: Record<Finding["severity"], string> = {
+  error: "border-l-coral",
+  warning: "border-l-amber",
+  info: "border-l-cyan",
 };
 
 export function FindingsPanel({
@@ -32,8 +34,9 @@ export function FindingsPanel({
   findings: Finding[];
   enabled: Set<number>;
   onToggle: (index: number) => void;
-  /** Accept (true) or clear (false) every fixable finding at once. */
-  onSetAll: (accept: boolean) => void;
+  /** Accept (true) or clear (false) fixable findings at once. When a column
+   *  filter is active, `scopeIndices` limits it to the findings on screen. */
+  onSetAll: (accept: boolean, scopeIndices?: number[]) => void;
   /** Jump to and highlight a finding's affected cells in the table. */
   onLocate: (index: number) => void;
   /** Preview-highlight a finding's cells on hover (null clears). */
@@ -70,8 +73,14 @@ export function FindingsPanel({
     );
   }
 
-  const fixableCount = findings.filter((f) => f.patchIds.length > 0).length;
-  const allApplied = fixableCount > 0 && enabled.size === fixableCount;
+  // "Accept/Clear all" acts on what's on screen: with a column filter active it
+  // scopes to the shown findings, so it can never silently toggle hidden ones.
+  const filtered = filterCol !== "all";
+  const shownFixable = visible
+    .filter(([f]) => f.patchIds.length > 0)
+    .map(([, i]) => i);
+  const shownAllApplied =
+    shownFixable.length > 0 && shownFixable.every((i) => enabled.has(i));
 
   // Honest partial-cleaning disclosure: leaving some fixes unaccepted is a
   // legitimate choice, but it shouldn't be an invisible one.
@@ -105,12 +114,13 @@ export function FindingsPanel({
           )}
         </div>
         <div className="flex items-center gap-3">
-          {fixableCount > 0 && (
+          {shownFixable.length > 0 && (
             <button
-              onClick={() => onSetAll(!allApplied)}
+              onClick={() => onSetAll(!shownAllApplied, filtered ? shownFixable : undefined)}
+              title={filtered ? "Applies only to the findings shown for this column" : undefined}
               className="rounded-md border border-line2 bg-card px-3 py-1.5 font-mono text-[11px] font-semibold text-body transition hover:border-mut"
             >
-              {allApplied ? "Clear all fixes" : "Accept all fixes"}
+              {shownAllApplied ? "Clear" : "Accept"} {filtered ? "shown" : "all"} fixes
             </button>
           )}
           <span className="font-mono text-xs font-semibold text-teal">
@@ -136,33 +146,27 @@ export function FindingsPanel({
             return (
               <li
                 key={`${f.rule}-${i}`}
-                className="flex items-start gap-4 px-6 py-4"
+                className={`flex items-start gap-3 border-l-[3px] px-5 py-2.5 ${STRIPE[f.severity]}`}
                 onMouseEnter={() => onHover(i)}
                 onMouseLeave={() => onHover(null)}
               >
-                <span
-                  className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-inset"
-                  aria-hidden
-                >
-                  <span className={`h-2 w-2 rounded-full ${DOT[f.severity]}`} />
-                </span>
                 <button
                   type="button"
                   onClick={() => onLocate(i)}
                   title="Show these cells in the table"
-                  className="group min-w-0 flex-1 rounded-lg text-left transition hover:bg-line/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal/40"
+                  className="group min-w-0 flex-1 rounded-md text-left transition hover:bg-line/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal/40"
                 >
                   <div className="flex flex-wrap items-center gap-2.5">
-                    <span className="text-[14px] font-semibold text-hi">{f.title}</span>
+                    <span className="text-[13.5px] font-semibold text-hi">{f.title}</span>
                     <span className={`pill ${pill.className}`}>{pill.text}</span>
                     <span className="font-mono text-[10px] text-dim opacity-0 transition group-hover:opacity-100">
                       ⌖ locate
                     </span>
                   </div>
-                  <p className="mt-1 text-[13px] leading-relaxed text-mut">{f.detail}</p>
+                  <p className="mt-0.5 max-w-[85ch] text-[12.5px] leading-snug text-mut">{f.detail}</p>
                 </button>
                 {fixable ? (
-                  <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-1.5">
+                  <label className="flex shrink-0 cursor-pointer items-center gap-2 pt-0.5">
                     <input
                       type="checkbox"
                       checked={enabled.has(i)}
@@ -172,7 +176,7 @@ export function FindingsPanel({
                     <span className="font-mono text-xs text-teal">apply</span>
                   </label>
                 ) : (
-                  <span className="shrink-0 pt-1.5 font-mono text-xs text-dim">review</span>
+                  <span className="shrink-0 pt-0.5 font-mono text-xs text-dim">review</span>
                 )}
               </li>
             );

@@ -60,7 +60,7 @@ export function ColumnsPanel({
   const rows = profile.rowCount || 1;
 
   return (
-    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
       {profile.columns.map((col, i) => {
         const filledPct = Math.round(((rows - col.empty) / rows) * 100);
         const s = stats[i]!;
