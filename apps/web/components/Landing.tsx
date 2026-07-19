@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Logo } from "@/components/Logo";
 
 /** A single "how it works" step. */
 function Step({ n, title, body }: { n: number; title: string; body: string }) {
@@ -33,6 +34,7 @@ export function Landing({ children }: { children: ReactNode }) {
     <div className="space-y-16 pb-16">
       {/* Hero */}
       <section className="pt-6 text-center">
+        <Logo size={64} className="mx-auto mb-6" />
         <span className="label inline-flex items-center gap-2 rounded-full border border-line2 bg-card px-3.5 py-1.5 text-teal!">
           <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden />
           Grammarly for spreadsheets
@@ -60,8 +62,9 @@ export function Landing({ children }: { children: ReactNode }) {
         </div>
       </section>
 
-      {/* Primary CTA — the paste/upload card */}
-      <section id="start" className="scroll-mt-8">
+      {/* Primary CTA — the paste/upload card. Full-width pages still deserve
+          a comfortable input width — a viewport-wide textarea reads badly. */}
+      <section id="start" className="mx-auto w-full max-w-[960px] scroll-mt-8">
         {children}
       </section>
 

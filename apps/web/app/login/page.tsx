@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { supabaseConfigured } from "@/lib/supabase/config";
+import { Logo } from "@/components/Logo";
 
 type Mode = "signin" | "signup";
 
@@ -57,7 +58,11 @@ function LoginForm() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-[420px] flex-col justify-center px-5 py-12">
-      <Link href="/" className="mb-8 text-[22px] font-bold tracking-tight text-hi">
+      <Link
+        href="/"
+        className="mb-8 flex items-center gap-2.5 text-[22px] font-bold tracking-tight text-hi"
+      >
+        <Logo size={30} />
         refynr<span className="text-teal">.</span>
       </Link>
 

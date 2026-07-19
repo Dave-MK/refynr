@@ -28,6 +28,7 @@ import type {
 } from "@/workers/cleanse.worker";
 import { AuthNav } from "@/components/AuthNav";
 import { ChangeHistory } from "@/components/ChangeHistory";
+import { Logo } from "@/components/Logo";
 import { Landing } from "@/components/Landing";
 import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
@@ -1010,11 +1011,12 @@ export default function Home() {
           </div>
         </div>
       )}
-      {/* Landing stays a comfortable reading width; once data loads the
-          workspace uses the full viewport so the grid gets real room. */}
-      <div className={base ? "w-full" : "mx-auto max-w-[960px]"}>
+      {/* Landing and workspace both use the full viewport; focused elements
+          (hero copy, the paste card) keep their own comfortable max-widths. */}
+      <div className="w-full">
       <header className="mb-8 flex items-center justify-between">
-        <h1 className="text-[22px] font-bold tracking-tight text-hi">
+        <h1 className="flex items-center gap-2.5 text-[22px] font-bold tracking-tight text-hi">
+          <Logo size={30} />
           refynr<span className="text-teal">.</span>
         </h1>
         <div className="flex items-center gap-5">
