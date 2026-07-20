@@ -148,11 +148,25 @@ export default function Home() {
   // can never overwrite a newer edit's result.
   const [asyncResult, setAsyncResult] = useState<{ nonce: number; result: CleanseResult } | null>(null);
   const [recleansing, setRecleansing] = useState<string | null>(null);
+  // JSON of the EngineOptions the current base.result was computed under —
+  // when the active options match, the base result is already fresh and no
+  // re-cleanse is needed (e.g. right after a transform, which analyses with
+  // the active options baked in).
+  const [baseOptionsKey, setBaseOptionsKey] = useState("{}");
   const recleanseNonce = useRef(0);
   const recleanseIntent = useRef<
     | null
     | { nonce: number; kind: "edit" }
-    | { nonce: number; kind: "transform"; table: Table; label: string }
+    | {
+        nonce: number;
+        kind: "transform";
+        table: Table;
+        label: string;
+        /** The history snapshot this transform pushed — removed if superseded. */
+        snap: (typeof undoStack.current)[number];
+        /** Options the worker is analysing with — becomes baseOptionsKey. */
+        optionsKey: string;
+      }
   >(null);
   // Version-comparison state — a second file to diff the loaded one against.
   const [baseName, setBaseName] = useState("data");
@@ -189,6 +203,7 @@ export default function Home() {
       base: { table: Table; result: CleanseResult } | null;
       baseName: string;
       analysedAt: number;
+      baseOptionsKey: string;
       disabled: Set<string>;
       skipRules: Set<string>;
       options: EngineOptions;
@@ -236,6 +251,7 @@ export default function Home() {
         setRecleansing(null);
         if (intent.kind === "transform") {
           setBase({ table: intent.table, result: msg.result });
+          setBaseOptionsKey(intent.optionsKey);
           setAnalysedAt(Date.now());
           setManualEdits(new Map());
           setAsyncResult(null);
@@ -270,6 +286,7 @@ export default function Home() {
       }
       setBase({ table: msg.table, result: msg.result });
       setBaseName(pendingName.current);
+      setBaseOptionsKey("{}"); // fresh loads analyse with default options
       setAnalysedAt(Date.now());
       setAsyncResult(null);
       setRecleansing(null);
@@ -357,23 +374,16 @@ export default function Home() {
     [base, manualEdits],
   );
 
-  // Whether non-default engine options are in play (from a recipe, command, or
-  // an expectation rule) — any of these means we must re-cleanse on the main thread.
-  const hasOptions = !!(
-    options.dateOrder ||
-    options.dateOutput ||
-    options.disabledRules?.length ||
-    options.constraints?.length ||
-    options.dedupeKey?.length
-  );
-
-  // Re-cleanse once the user has made manual edits or set engine options, so
-  // the score, findings and cleaned output all update live. Small tables
-  // re-cleanse synchronously (instant); big tables go through the worker (the
-  // effect below) and serve the previous result until the fresh one lands —
-  // a beat of staleness beats seconds of frozen UI.
+  // Re-cleanse once the user has made manual edits or the engine options
+  // differ from the ones the CURRENT base result was computed under (tracked
+  // as baseOptionsKey — a transform re-analyses with the active options, so
+  // landing one must not trigger a second, redundant re-analysis). Small
+  // tables re-cleanse synchronously (instant); big tables go through the
+  // worker (the effect below) and serve the previous result until the fresh
+  // one lands — a beat of staleness beats seconds of frozen UI.
   const isBig = (base?.table.rows.length ?? 0) > ASYNC_CLEANSE_ROWS;
-  const needsRecleanse = manualEdits.size > 0 || hasOptions;
+  const optionsKey = JSON.stringify(options);
+  const needsRecleanse = manualEdits.size > 0 || optionsKey !== baseOptionsKey;
 
   const result = useMemo(() => {
     if (!base) return null;
@@ -382,22 +392,42 @@ export default function Home() {
     return cleanse(working!, options);
   }, [base, needsRecleanse, isBig, asyncResult, working, options]);
 
-  // Drive the worker for big-table re-analysis. The nonce makes the latest
-  // request win: a stale response is dropped in the worker handler above.
+  // A transform that never landed (superseded by a newer action before its
+  // worker analysis returned) must not leave its snapshot in the history —
+  // it would read as an applied step that did nothing.
+  const cancelPendingTransform = useCallback(() => {
+    const intent = recleanseIntent.current;
+    if (intent?.kind === "transform") {
+      const i = undoStack.current.indexOf(intent.snap);
+      if (i !== -1) {
+        undoStack.current.splice(i, 1);
+        setUndoDepth(undoStack.current.length);
+      }
+    }
+  }, []);
+
+  // Drive the worker for big-table re-analysis. Debounced so a burst of quick
+  // edits coalesces into one analysis; the nonce makes the latest request win
+  // (a stale response is dropped in the worker handler above).
   useEffect(() => {
     if (!isBig || !working) return;
     if (!needsRecleanse) {
+      cancelPendingTransform();
       recleanseIntent.current = null;
       setRecleansing(null);
       return;
     }
-    const nonce = ++recleanseNonce.current;
-    recleanseIntent.current = { nonce, kind: "edit" };
-    setRecleansing(
-      `Re-analysing ${working.rows.length.toLocaleString("en-GB")} rows after your change…`,
-    );
-    workerRef.current?.postMessage({ kind: "recleanse", table: working, options, nonce });
-  }, [isBig, needsRecleanse, working, options]);
+    const timer = window.setTimeout(() => {
+      cancelPendingTransform();
+      const nonce = ++recleanseNonce.current;
+      recleanseIntent.current = { nonce, kind: "edit" };
+      setRecleansing(
+        `Re-analysing ${working.rows.length.toLocaleString("en-GB")} rows after your change…`,
+      );
+      workerRef.current?.postMessage({ kind: "recleanse", table: working, options, nonce });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [isBig, needsRecleanse, working, options, cancelPendingTransform]);
 
   // Which finding indices are currently accepted (fixable, not un-ticked, and
   // not left un-accepted by a recipe's skip list).
@@ -471,6 +501,7 @@ export default function Home() {
         base,
         baseName,
         analysedAt,
+        baseOptionsKey,
         disabled: new Set(disabled),
         skipRules: new Set(skipRules),
         options,
@@ -479,7 +510,7 @@ export default function Home() {
       if (undoStack.current.length > 50) undoStack.current.shift();
       setUndoDepth(undoStack.current.length);
     },
-    [base, baseName, analysedAt, disabled, skipRules, options, manualEdits],
+    [base, baseName, analysedAt, baseOptionsKey, disabled, skipRules, options, manualEdits],
   );
 
   const restore = useCallback((prev: (typeof undoStack.current)[number]) => {
@@ -492,6 +523,7 @@ export default function Home() {
     setBase(prev.base);
     setBaseName(prev.baseName);
     setAnalysedAt(prev.analysedAt);
+    setBaseOptionsKey(prev.baseOptionsKey);
     setDisabled(prev.disabled);
     setSkipRules(prev.skipRules);
     setOptions(prev.options);
@@ -553,12 +585,20 @@ export default function Home() {
         showToast(noopMessage, false);
         return;
       }
+      cancelPendingTransform(); // a newer transform supersedes an unfinished one
       snapshot(label);
       if (next.rows.length > ASYNC_CLEANSE_ROWS) {
         // Big table: analyse the reshaped data in the worker; the base swaps
         // in when the result lands so the UI never freezes.
         const nonce = ++recleanseNonce.current;
-        recleanseIntent.current = { nonce, kind: "transform", table: next, label };
+        recleanseIntent.current = {
+          nonce,
+          kind: "transform",
+          table: next,
+          label,
+          snap: undoStack.current[undoStack.current.length - 1]!,
+          optionsKey: JSON.stringify(options),
+        };
         setRecleansing(
           `${label} — re-analysing ${next.rows.length.toLocaleString("en-GB")} rows…`,
         );
@@ -566,6 +606,7 @@ export default function Home() {
         return;
       }
       setBase({ table: next, result: cleanse(next, options) });
+      setBaseOptionsKey(JSON.stringify(options));
       setAnalysedAt(Date.now());
       setManualEdits(new Map());
       setPinnedKeys(new Set());
@@ -573,7 +614,7 @@ export default function Home() {
       setScrollToKey(null);
       showToast(label);
     },
-    [working, options, snapshot, showToast],
+    [working, options, snapshot, showToast, cancelPendingTransform],
   );
 
   const onSplit = useCallback(
