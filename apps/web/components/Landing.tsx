@@ -46,17 +46,19 @@ export function Landing({ children }: { children: ReactNode }) {
           </span>
           .
         </h2>
-        <p className="mx-auto mt-5 max-w-[560px] text-[15px] leading-relaxed text-mut">
-          refynr spots the mess in your data — inconsistent formats, duplicates,
-          broken postcodes and phone numbers, stray whitespace — and proposes a
-          fix for each one. You review every change and export a clean copy.
-          Nothing is ever altered behind your back.
+        <p className="mx-auto mt-5 max-w-[600px] text-[15px] leading-relaxed text-mut">
+          refynr finds what's quietly wrong with your data — duplicates, mixed
+          date formats, placeholder blanks, the damage Excel does to IDs and
+          codes — and proposes a fix for each one, with the reason spelled out.
+          You review every change, export a clean copy with an audit report,
+          and save your decisions as a recipe for next month's file.
         </p>
 
         {/* Trust row */}
         <div className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-[11px] text-dim">
           <span>✓ Runs entirely in your browser</span>
           <span>✓ Your original is never modified</span>
+          <span>✓ CSV, Excel, JSON &amp; Parquet</span>
           <span>✓ No account needed to clean</span>
           <span>✓ UK formats built in</span>
         </div>
@@ -80,17 +82,17 @@ export function Landing({ children }: { children: ReactNode }) {
           <Step
             n={1}
             title="Paste or upload"
-            body="Drop in a CSV or Excel file, or paste straight from Excel or Google Sheets. It's analysed on your device — no upload, no waiting."
+            body="Drop in CSV, Excel, JSON or Parquet — or paste straight from Excel or Google Sheets. Semicolon and pipe files just work. It's analysed on your device — no upload, no waiting."
           />
           <Step
             n={2}
             title="See what's wrong"
-            body="Get a data-health score and an itemised list of findings. Every issue is explained in plain English, so you know why it matters."
+            body="Get a data-health score and an itemised list of findings, each explained in plain English. Anything refynr can't fix safely — an impossible date, a suspect ID — is flagged for you, never guessed."
           />
           <Step
             n={3}
-            title="Review & export"
-            body="Accept fixes one by one and watch the score climb. Download a clean copy as CSV or Excel — your original file is untouched."
+            title="Review, export, repeat"
+            body="Accept fixes one by one, edit cells inline, reshape columns — every step undoable. Export a clean copy plus an audit report, and save your decisions as a recipe to replay on next month's file."
           />
         </div>
       </section>
@@ -114,19 +116,31 @@ export function Landing({ children }: { children: ReactNode }) {
           />
           <Feature
             title="UK formats, done right"
-            body="Postcodes and phone numbers validated to UK standards — the details US-centric tools get wrong on British data."
+            body="Postcodes, phone numbers, VAT numbers (checksum included), sort codes and Companies House numbers — the details US-centric tools get wrong on British data."
           />
           <Feature
             title="The everyday mess"
-            body="Stray whitespace, inconsistent casing, mixed date formats, duplicate rows, blank cells, mojibake encoding, malformed emails and numbers — normalised automatically."
+            body="Stray whitespace, inconsistent casing, duplicate rows, placeholder blanks like “NA” and “NULL”, mojibake encoding, malformed emails and numbers-stored-as-text — normalised automatically."
           />
           <Feature
-            title="A health score that means something"
-            body="One deterministic score across consistency, completeness, uniqueness and validity — with the exact gain you'd get if you accepted every fix."
+            title="Catches what Excel broke"
+            body="Stripped leading zeros, IDs collapsed into scientific notation, codes silently turned into dates, rows with shifted columns — the classic export injuries, flagged before they reach your analysis."
           />
           <Feature
-            title="Advisory, never reckless"
-            body="If a value can't be fixed with confidence — an impossible date, an invalid email — refynr flags it for you to decide. It never guesses."
+            title="Honest when it can't be sure"
+            body="A column mixing UK and US date orders? Ambiguous cells are flagged, not guessed. Probable duplicates are shown for review, never auto-deleted. Confidence is earned, not asserted."
+          />
+          <Feature
+            title="A score you can't fool"
+            body="Deterministic across validity, consistency, completeness and uniqueness — and one cratered dimension can't hide behind three clean ones. Accepting fixes shows you the exact gain first."
+          />
+          <Feature
+            title="Repeatable with recipes"
+            body="Save your cleaning decisions as a recipe — pure configuration, none of your data — and replay it on next month's export in one click, or headlessly in CI with the refynr CLI."
+          />
+          <Feature
+            title="Compare & prove it"
+            body="Diff two versions of a dataset row by row to see exactly what changed since the last export, and ship the audit report (PDF, HTML or Markdown) alongside the clean file."
           />
         </div>
       </section>
