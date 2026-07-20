@@ -5,7 +5,8 @@
       "name": "refynr-web",
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@refynr/web", "dev"],
-      "port": 3000
+      "port": 3000,
+      "autoPort": true
     }
   ]
 }

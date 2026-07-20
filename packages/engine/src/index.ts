@@ -52,6 +52,7 @@ export {
 } from "./report.js";
 export {
   RECIPE_VERSION,
+  ENGINE_VERSION,
   createRecipe,
   serializeRecipe,
   parseRecipe,
@@ -78,6 +79,7 @@ const DEFAULT_OPTIONS: Required<EngineOptions> = {
   disabledRules: [],
   constraints: [],
   dedupeKey: [],
+  projection: "full",
 };
 
 /** Registration order = execution order = display order of findings. */
@@ -120,6 +122,22 @@ export function cleanse(
   const findings: CleanseResult["findings"] = [];
   const patches: CleanseResult["patches"] = [];
 
+  // Structural problems noticed at parse time. No patch can repair the source
+  // file's structure, so this is advisory — but silence here would let a
+  // malformed export (unquoted commas shifting fields) sail through looking
+  // healthy.
+  const ragged = table.parseIssues?.raggedRows ?? 0;
+  if (ragged > 0) {
+    findings.push({
+      rule: "ragged-rows",
+      severity: "warning",
+      title: `${ragged} row${ragged === 1 ? " has" : "s have"} the wrong number of columns`,
+      detail: `${ragged} non-empty row${ragged === 1 ? "" : "s"} contained ${ragged === 1 ? "a different number" : "different numbers"} of fields than the header row. That usually means unquoted commas (or the wrong delimiter) somewhere upstream — values may have shifted into neighbouring columns. The short rows were padded with blanks so you can review them, but check the source export before trusting this data.`,
+      count: ragged,
+      patchIds: [],
+    });
+  }
+
   for (const fixer of FIXERS) {
     if (disabled.has(fixer.rule)) continue;
     const out = fixer.run({ table, profile, options: opts });
@@ -145,12 +163,26 @@ export function cleanse(
 
   // Projected score: re-run analysis on the fully-patched table (captures
   // second-order effects, e.g. a casing fix collapsing a near-duplicate),
-  // but score it against the original basis.
-  const cleanedTable = applyPatches(table, patches);
+  // but score it against the original basis. Callers that never display the
+  // projection (CI gates, residual checks) pass projection: "none" and skip
+  // the second full pass — it halves the cost of an analysis.
+  if (opts.projection === "none") {
+    return { profile, findings, patches, score, projectedScore: score };
+  }
+
+  // parseIssues carry through: no patch repairs source-file structure, so the
+  // projected score must keep paying for ragged rows.
+  const cleanedTable = { ...applyPatches(table, patches), parseIssues: table.parseIssues };
   const cleanedProfile = profileTable(cleanedTable);
-  const remainingFindings = FIXERS.filter((f) => !disabled.has(f.rule)).flatMap(
-    (f) => f.run({ table: cleanedTable, profile: cleanedProfile, options: opts }).findings,
-  );
+  const remainingFindings: CleanseResult["findings"] = [];
+  if (ragged > 0) {
+    for (const f of findings) if (f.rule === "ragged-rows") remainingFindings.push(f);
+  }
+  for (const fixer of FIXERS) {
+    if (disabled.has(fixer.rule)) continue;
+    const out = fixer.run({ table: cleanedTable, profile: cleanedProfile, options: opts });
+    for (const f of out.findings) remainingFindings.push(f);
+  }
   if (options.constraints?.length) {
     for (const f of checkConstraints(cleanedTable, cleanedProfile, options.constraints))
       remainingFindings.push(f);

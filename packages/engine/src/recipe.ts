@@ -15,8 +15,16 @@ import { applyPatches } from "./table.js";
  */
 export const RECIPE_VERSION = 1 as const;
 
+/** Engine behaviour version recorded in recipes. Bump when fixer behaviour
+ *  changes so a replayed recipe can disclose "made with a different engine"
+ *  — the reproducibility breadcrumb pipeline tools solve with lockfiles.
+ *  Keep in sync with packages/engine/package.json. */
+export const ENGINE_VERSION = "0.2.0";
+
 export interface Recipe {
   version: typeof RECIPE_VERSION;
+  /** Engine version the recipe was created under (informational). */
+  engineVersion?: string;
   /** User-facing label, e.g. "Monthly CRM export". */
   name: string;
   /** ISO timestamp; optional so recipes stay deterministic in tests. */
@@ -42,6 +50,7 @@ export function createRecipe(
 ): Recipe {
   return {
     version: RECIPE_VERSION,
+    engineVersion: ENGINE_VERSION,
     name: name.trim() || "Untitled recipe",
     ...(createdAt ? { createdAt } : {}),
     options: {
@@ -99,8 +108,14 @@ export function parseRecipe(json: string): Recipe {
   if (!isRecipe(value)) {
     throw new Error("That file doesn't look like a refynr recipe.");
   }
-  // Normalise through createRecipe so downstream code sees a clean shape.
-  return createRecipe(value.name, value.options, value.skipRules, value.createdAt);
+  // Normalise through createRecipe so downstream code sees a clean shape —
+  // but keep the ORIGINAL engineVersion: it records what the recipe was made
+  // with, not what's parsing it.
+  const normalised = createRecipe(value.name, value.options, value.skipRules, value.createdAt);
+  if (typeof value.engineVersion === "string") {
+    normalised.engineVersion = value.engineVersion;
+  }
+  return normalised;
 }
 
 export interface RecipeRun {

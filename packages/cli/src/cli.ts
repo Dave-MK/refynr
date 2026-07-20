@@ -217,11 +217,14 @@ async function main(): Promise<number> {
 
   const report = buildReport(result, acceptedIds);
   // Residual health of the actual output — the number a CI gate should judge.
-  const afterScore = cleanse(cleaned).score.overall;
+  // NOTE: scored on the cleaned file with its own basis, so it can differ
+  // from the web UI's shared-basis projection; --json exposes both.
+  // projection: "none" skips the projected-score pass this call never uses.
+  const afterScore = cleanse(cleaned, { projection: "none" }).score.overall;
 
   // Human summary always goes to stderr, so stdout stays pipe-clean.
   err("");
-  err(`  Health:  ${report.scoreBefore} -> ${afterScore}`);
+  err(`  Health:  ${report.scoreBefore} -> ${afterScore} (residual, scored on the output file)`);
   err(`  Rows:    ${report.rowsBefore} -> ${report.rowsAfter} (${report.rowsRemoved} removed)`);
   err(`  Cells:   ${report.cellsChanged} changed`);
   err(`  Flagged: ${report.advisories.reduce((n, a) => n + a.count, 0)} for review`);

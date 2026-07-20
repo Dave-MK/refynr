@@ -36,14 +36,17 @@ export function buildReport(
   acceptedIds: Set<string>,
 ): RunReport {
   const applied = new Map<string, ReportRuleLine>();
-  let cellsChanged = 0;
-  let rowsRemoved = 0;
+  // Distinct units, not patch counts: two rules can patch the same cell
+  // (trim + email), and an audit that says "6 cells changed" when 4 did
+  // overstates the work — the one thing an audit must never do.
+  const cellsTouched = new Set<string>();
+  const rowsTouched = new Set<number>();
   let headersChanged = 0;
 
   for (const p of result.patches) {
     if (!acceptedIds.has(p.id)) continue;
-    if (p.kind === "cell") cellsChanged++;
-    else if (p.kind === "remove-row") rowsRemoved++;
+    if (p.kind === "cell") cellsTouched.add(`${p.cell.row}:${p.cell.col}`);
+    else if (p.kind === "remove-row") rowsTouched.add(p.row);
     else headersChanged++;
 
     const line = applied.get(p.rule);
@@ -56,6 +59,8 @@ export function buildReport(
     .map((f) => ({ rule: f.rule, title: f.title, count: f.count }));
 
   const rowsBefore = result.profile.rowCount;
+  const rowsRemoved = rowsTouched.size;
+  const cellsChanged = cellsTouched.size;
 
   return {
     rowsBefore,

@@ -1,5 +1,5 @@
 import type { Finding, RowRemovalPatch } from "../types.js";
-import { cellText } from "../table.js";
+import { cellText, isMissingSentinel } from "../table.js";
 import { cleanWhitespace } from "./whitespace.js";
 import { n, verb, type Fixer, type FixerOutput } from "./fixer.js";
 
@@ -26,20 +26,45 @@ const ALL_PAIRS_CAP = 500;
  *  so no literal control character sits in this source file. */
 const KEY_SEP = String.fromCharCode(0);
 
+/** Column names that suggest an identifier even in small tables. */
+const ID_NAME_RE =
+  /(^|[^a-z])(id|ids|uid|ref|reference|code|sku|key|account|acct|no|number)([^a-z]|$)/i;
+
+/** Below this fingerprint length there's no meaningful typo evidence — a
+ *  one-token fingerprint a single edit away is coincidence, not a variant. */
+const MIN_TYPO_LEN = 6;
+
 /**
  * Whole-row fingerprint for key-collision clustering: every cell is lowercased,
  * stripped of punctuation, and its words sorted, so token order and punctuation
  * stop mattering. "Smith, John" and "John Smith" collide; "Acme Ltd." and
- * "Acme Ltd" collide.
+ * "Acme Ltd" collide. Missing-value sentinels contribute nothing (they aren't
+ * identity). `skipCols` drops identifier-ish columns from the *context*
+ * fingerprint used for typo comparison — two rows that differ only in an ID
+ * are distinct records by design, not typos of each other. `lettersOnly`
+ * additionally drops digit-only tokens: a one-digit difference between two
+ * numbers (dates, amounts, quantities) is a different value, not a typo, so
+ * numeric tokens carry no typo evidence.
  */
-function fingerprint(row: readonly unknown[]): string {
+function fingerprint(
+  row: readonly unknown[],
+  skipCols?: ReadonlySet<number>,
+  lettersOnly = false,
+): string {
   const tokens: string[] = [];
-  for (const v of row) {
+  for (let c = 0; c < row.length; c++) {
+    if (skipCols?.has(c)) continue;
+    const v = row[c];
+    if (isMissingSentinel(v as never)) continue;
     const cleaned = cleanWhitespace(cellText(v as never))
       .toLowerCase()
       .replace(/[^\p{L}\p{N}@]+/gu, " ")
       .trim();
-    if (cleaned) tokens.push(...cleaned.split(" "));
+    if (!cleaned) continue;
+    for (const tok of cleaned.split(" ")) {
+      if (lettersOnly && !/\p{L}/u.test(tok)) continue;
+      tokens.push(tok);
+    }
   }
   return tokens.sort().join(" ");
 }
@@ -80,11 +105,31 @@ function editBudget(len: number): number {
  */
 export const duplicateFixer: Fixer = {
   rule: EXACT_RULE,
-  run({ table, options }): FixerOutput {
+  run({ table, profile, options }): FixerOutput {
     const patches: RowRemovalPatch[] = [];
     const exactSeen = new Map<string, number>();
     // fingerprint -> the row indices (first occurrences only) that produced it
     const printGroups = new Map<string, number[]>();
+    // full fingerprint -> context fingerprint (identifier columns excluded),
+    // the string typo comparisons run on.
+    const ctxByFull = new Map<string, string>();
+
+    // Identifier-ish columns: near-unique with enough rows to be sure, or
+    // id-named and fully distinct. Entity-resolution's cardinal rule is that
+    // these never contribute to similarity — a row pair differing only in an
+    // ID is either genuinely distinct or a job for the dedupe-key feature,
+    // never a "typo".
+    const idCols = new Set<number>();
+    for (const col of profile.columns) {
+      if (col.nonEmpty === 0) continue;
+      const ratio = col.distinct / col.nonEmpty;
+      if (
+        (col.nonEmpty >= 10 && ratio >= 0.9) ||
+        (ID_NAME_RE.test(col.name) && col.distinct === col.nonEmpty)
+      ) {
+        idCols.add(col.index);
+      }
+    }
 
     // User-chosen key columns narrow what "duplicate" means: matching on just
     // these columns (e.g. Email) counts, even when other cells differ. Keys
@@ -132,7 +177,10 @@ export const duplicateFixer: Fixer = {
         if (!fp) return;
         const group = printGroups.get(fp);
         if (group) group.push(r);
-        else printGroups.set(fp, [r]);
+        else {
+          printGroups.set(fp, [r]);
+          ctxByFull.set(fp, fingerprint(row, idCols, true));
+        }
       }
     });
 
@@ -157,8 +205,17 @@ export const duplicateFixer: Fixer = {
       };
       const tryUnion = (a: string, b: string): void => {
         if (find(a) === find(b)) return;
-        const budget = editBudget(Math.min(a.length, b.length));
-        if (boundedEditDistance(a, b, budget) <= budget) {
+        const ca = ctxByFull.get(a)!;
+        const cb = ctxByFull.get(b)!;
+        // Identical context with different full fingerprints means the rows
+        // differ only in identifier columns — distinct records, not typos.
+        if (ca === cb) return;
+        // Tiny fingerprints one edit apart are coincidence ("1" vs "2"),
+        // not typo evidence.
+        const minLen = Math.min(ca.length, cb.length);
+        if (minLen < MIN_TYPO_LEN) return;
+        const budget = editBudget(minLen);
+        if (boundedEditDistance(ca, cb, budget) <= budget) {
           parent.set(find(a), find(b));
         }
       };
@@ -171,12 +228,18 @@ export const duplicateFixer: Fixer = {
           }
         }
       } else {
-        // Reversed keys are precomputed once (Schwartzian transform) — the
-        // sort comparator runs O(n log n) times and must not allocate.
+        // Sort by CONTEXT fingerprint (the string distances run on) so the
+        // window heuristic keeps typo-variants adjacent. Reversed keys are
+        // precomputed once (Schwartzian transform) — the sort comparator runs
+        // O(n log n) times and must not allocate.
         const reverse = (s: string): string => [...s].reverse().join("");
-        const reversed = new Map(prints.map((p) => [p, reverse(p)]));
+        const reversed = new Map(
+          prints.map((p) => [p, reverse(ctxByFull.get(p)!)]),
+        );
         const passes: string[][] = [
-          [...prints].sort(),
+          [...prints].sort((a, b) =>
+            ctxByFull.get(a)! < ctxByFull.get(b)! ? -1 : 1,
+          ),
           [...prints].sort((a, b) =>
             reversed.get(a)! < reversed.get(b)! ? -1 : 1,
           ),

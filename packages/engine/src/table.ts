@@ -11,6 +11,23 @@ export function isEmptyCell(v: CellValue): boolean {
 }
 
 /**
+ * Missing-value sentinels: placeholder text that means "no value" but reads
+ * as a real value to spreadsheets, imports, and naive counts (pandas
+ * recognises the same family by default). Deliberately conservative — only
+ * tokens that are near-universally placeholders, compared as the whole
+ * trimmed cell, case-insensitively.
+ */
+const MISSING_SENTINELS = new Set([
+  "na", "n/a", "n.a.", "#n/a", "#na", "null", "none", "nan", "nil", "-", "--",
+]);
+
+/** True when the whole cell is a missing-value placeholder like "N/A". */
+export function isMissingSentinel(v: CellValue): boolean {
+  if (typeof v !== "string") return false;
+  return MISSING_SENTINELS.has(v.trim().toLowerCase());
+}
+
+/**
  * Apply accepted patches to a table, returning a NEW table.
  * The original is never mutated — this is the only way "cleaned" data exists.
  * Cell patches apply first; row removals apply last so indices stay valid.
@@ -47,16 +64,53 @@ export function applyPatches(
 }
 
 /**
+ * Sniff the delimiter from a sample of the text: try each candidate and pick
+ * the one that yields the most consistent multi-column grid. Tab is tried
+ * first so a spreadsheet paste (tabs, but data containing commas) keeps
+ * winning ties; semicolon and pipe cover EU-locale and finance-tool exports
+ * that would otherwise parse as one silent column.
+ */
+function sniffDelimiter(text: string): string {
+  const sample = text.split("\n", 21).join("\n");
+  let best = ",";
+  let bestScore = 0;
+  for (const d of ["\t", ",", ";", "|"]) {
+    const grid = parseDelimited(sample, d);
+    const widths = grid.map((r) => r.length);
+    if (widths.length === 0) continue;
+    const counts = new Map<number, number>();
+    for (const w of widths) counts.set(w, (counts.get(w) ?? 0) + 1);
+    let modalWidth = 1;
+    let modalCount = 0;
+    for (const [w, c] of counts) {
+      if (c > modalCount || (c === modalCount && w > modalWidth)) {
+        modalWidth = w;
+        modalCount = c;
+      }
+    }
+    if (modalWidth < 2) continue; // this delimiter never splits anything
+    const score = (modalCount / widths.length) * 100 + modalWidth;
+    if (score > bestScore) {
+      bestScore = score;
+      best = d;
+    }
+  }
+  return best;
+}
+
+/**
  * Parse pasted text (from Excel/Sheets clipboard or a raw CSV snippet)
- * into a Table. Tab-delimited wins if tabs are present (spreadsheet paste),
- * otherwise falls back to a small CSV parser that honours quoted fields.
- * First row is treated as headers.
+ * into a Table. The delimiter is sniffed (tab, comma, semicolon, pipe) from
+ * a sample, honouring quoted fields. First row is treated as headers.
+ * Non-empty rows whose field count differs from the header's are counted in
+ * `parseIssues.raggedRows` — the classic symptom of unquoted delimiters —
+ * so the analysis can flag a malformed export instead of silently padding.
  */
 export function fromDelimitedText(text: string): Table {
   const normalized = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
   if (!normalized.trim()) return { headers: [], rows: [] };
 
-  const delimiter = normalized.includes("\t") ? "\t" : ",";
+  const delimiter = sniffDelimiter(normalized);
   const grid = parseDelimited(normalized, delimiter);
 
   const width = grid.reduce((w, r) => Math.max(w, r.length), 0);
@@ -72,7 +126,19 @@ export function fromDelimitedText(text: string): Table {
     (_, i) => headerRow[i]?.trim() || `Column ${i + 1}`,
   );
 
-  return { headers, rows: grid.slice(1).map(pad) };
+  let raggedRows = 0;
+  for (let i = 1; i < grid.length; i++) {
+    const r = grid[i]!;
+    if (r.length !== headerRow.length && r.some((f) => f.trim() !== "")) {
+      raggedRows++;
+    }
+  }
+
+  return {
+    headers,
+    rows: grid.slice(1).map(pad),
+    ...(raggedRows > 0 ? { parseIssues: { raggedRows } } : {}),
+  };
 }
 
 export interface FindReplaceOptions {

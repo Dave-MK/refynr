@@ -4,7 +4,7 @@ import type {
   Table,
   TableProfile,
 } from "./types.js";
-import { cellText, isEmptyCell } from "./table.js";
+import { cellText, isEmptyCell, isMissingSentinel } from "./table.js";
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -44,6 +44,9 @@ function classify(raw: string): ColumnType {
     return "number";
   }
   if (BOOL_VALUES.has(s.toLowerCase())) return "boolean";
+  // IPv4 addresses satisfy the phone shape (digits + dots) — keep them out of
+  // "phone" so the phone fixer and PII labelling can't misread them.
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return "string";
   // Phone last among pattern types: plain integers already matched number.
   if (PHONE_RE.test(s) && /\d{7,}/.test(s.replace(/\D/g, ""))) return "phone";
   return "string";
@@ -74,12 +77,19 @@ export function profileTable(table: Table): TableProfile {
   const columns: ColumnProfile[] = table.headers.map((name, index) => {
     const nonEmptyValues: string[] = [];
     let empty = 0;
+    let sentinels = 0;
     const distinct = new Set<string>();
 
     for (const row of table.rows) {
       const v = row[index] ?? null;
       if (isEmptyCell(v)) {
         empty++;
+      } else if (isMissingSentinel(v)) {
+        // Placeholder "values" (NA, NULL, -, …) are missing data wearing a
+        // costume: counting them as present would overstate completeness and
+        // pollute type inference and samples.
+        empty++;
+        sentinels++;
       } else {
         const s = cellText(v);
         nonEmptyValues.push(s);
@@ -96,6 +106,7 @@ export function profileTable(table: Table): TableProfile {
       typeConfidence: Number(confidence.toFixed(3)),
       nonEmpty: nonEmptyValues.length,
       empty,
+      sentinels,
       distinct: distinct.size,
       samples: nonEmptyValues.slice(0, 5),
     };

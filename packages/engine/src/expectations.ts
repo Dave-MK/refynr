@@ -1,5 +1,5 @@
 import type { CellRef, Constraint, Finding, Table, TableProfile } from "./types.js";
-import { cellText, isEmptyCell } from "./table.js";
+import { cellText, isEmptyCell, isMissingSentinel } from "./table.js";
 import { n, verb } from "./fixers/fixer.js";
 
 /** Constraint kind → the rule string used for scoring and display. */
@@ -89,7 +89,7 @@ export function suggestConstraints(
       const seen = new Set<string>();
       for (const row of table.rows) {
         const v = row[col.index];
-        if (isEmptyCell(v)) continue;
+        if (isEmptyCell(v) || isMissingSentinel(v)) continue;
         const display = cellText(v).trim();
         const key = display.toLowerCase();
         if (seen.has(key)) continue;

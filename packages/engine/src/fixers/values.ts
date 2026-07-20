@@ -1,5 +1,5 @@
 import type { CellPatch, Finding } from "../types.js";
-import { cellText, isEmptyCell } from "../table.js";
+import { cellText, isEmptyCell, isMissingSentinel } from "../table.js";
 import { cleanWhitespace } from "./whitespace.js";
 import { cellPatchId, n, type Fixer, type FixerOutput } from "./fixer.js";
 
@@ -48,7 +48,7 @@ export const valueFixer: Fixer = {
       const fpByCleaned = new Map<string, string>();
       for (const row of table.rows) {
         const v = row[col.index];
-        if (isEmptyCell(v) || typeof v !== "string") continue;
+        if (isEmptyCell(v) || typeof v !== "string" || isMissingSentinel(v)) continue;
         const cleaned = cleanWhitespace(v);
         let fp = fpByCleaned.get(cleaned);
         if (fp === undefined) {
@@ -83,7 +83,7 @@ export const valueFixer: Fixer = {
 
       table.rows.forEach((row, r) => {
         const v = row[col.index];
-        if (isEmptyCell(v) || typeof v !== "string") return;
+        if (isEmptyCell(v) || typeof v !== "string" || isMissingSentinel(v)) return;
         const cleaned = cleanWhitespace(v);
         const winner = winners.get(fpByCleaned.get(cleaned) ?? "");
         if (winner === undefined || winner === cleaned) return;

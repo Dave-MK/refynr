@@ -11,6 +11,10 @@ const RULE_DIMENSION: Record<string, DimensionKey> = {
   "fix-encoding": "consistency",
   "suspect-leading-zeros": "validity",
   "numeric-outliers": "validity",
+  "ragged-rows": "validity",
+  "ambiguous-date": "validity",
+  "excel-date-artifact": "validity",
+  "excel-scientific-notation": "validity",
   "invalid-email": "validity",
   "invalid-postcode": "validity",
   "invalid-phone": "validity",
@@ -73,6 +77,16 @@ const DIMENSION_META: Record<
 
 const SEVERITY_WEIGHT = { error: 1, warning: 0.5, info: 0.2 } as const;
 
+/**
+ * Per-rule dampeners on top of severity. Near-duplicates are a *probabilistic*
+ * signal (clusters the user must judge, never auto-removed) — they should
+ * inform the uniqueness score, not be able to tank it the way confirmed exact
+ * duplicates can.
+ */
+const RULE_WEIGHT: Record<string, number> = {
+  "near-duplicate-rows": 0.4,
+};
+
 /** Denominator scale for a score. Pass the ORIGINAL table's counts when
  *  scoring a cleaned/patched table so the two scores share one basis and
  *  remediation can only ever raise the score (never shrink the denominator). */
@@ -109,22 +123,36 @@ export function scoreTable(
     for (const f of findings) {
       if (RULE_DIMENSION[f.rule] !== key) continue;
       issues += f.count;
-      weighted += f.count * SEVERITY_WEIGHT[f.severity];
+      weighted +=
+        f.count * SEVERITY_WEIGHT[f.severity] * (RULE_WEIGHT[f.rule] ?? 1);
     }
-    const penalty = Math.min(1, (weighted / denom) * meta.sensitivity);
+    // Smooth compounding penalty: score = 100·(1−rate)^sensitivity. Unlike a
+    // capped linear penalty this has no cliff and no flat tail — a table with
+    // 90% duplicates scores worse than one with 25%, all the way down, so two
+    // datasets can always be ranked and the score stays monotone in issues.
+    const rate = Math.min(1, weighted / denom);
     return {
       key,
       label: meta.label,
-      score: Math.round((1 - penalty) * 100),
+      score: Math.round(Math.pow(1 - rate, meta.sensitivity) * 100),
       issues,
     };
   });
 
+  // Weighted GEOMETRIC mean (weights sum to 1). For healthy data this tracks
+  // the arithmetic mean almost exactly, but a cratered dimension drags the
+  // composite down instead of being averaged away — a table that is 90%
+  // duplicate rows must not read as a B-grade because the other three
+  // dimensions are clean. Dimension scores are floored at 1 so a zero can't
+  // erase the composite entirely (it caps it, weighted by importance).
   const overall = Math.round(
-    dimensions.reduce(
-      (sum, d) => sum + d.score * DIMENSION_META[d.key].weight,
-      0,
-    ),
+    100 *
+      dimensions.reduce(
+        (prod, d) =>
+          prod *
+          Math.pow(Math.max(d.score, 1) / 100, DIMENSION_META[d.key].weight),
+        1,
+      ),
   );
 
   return { overall, dimensions };

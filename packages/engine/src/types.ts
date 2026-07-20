@@ -5,6 +5,13 @@ export type CellValue = string | number | boolean | null;
 export interface Table {
   headers: string[];
   rows: CellValue[][];
+  /** Structural problems noticed while parsing (e.g. ragged rows). Optional so
+   *  hand-built tables and older shells keep working; carried through cleaning
+   *  because no patch can repair the source file's structure. */
+  parseIssues?: {
+    /** Non-empty rows whose field count differed from the header row's. */
+    raggedRows: number;
+  };
 }
 
 export interface CellRef {
@@ -91,7 +98,10 @@ export interface ColumnProfile {
   /** Share of non-empty values matching the inferred type (0–1). */
   typeConfidence: number;
   nonEmpty: number;
+  /** Cells that are blank OR hold a missing-value sentinel (NA, NULL, -, …). */
   empty: number;
+  /** How many of `empty` were sentinels rather than true blanks. */
+  sentinels: number;
   distinct: number;
   samples: string[];
 }
@@ -138,6 +148,13 @@ export interface EngineOptions {
    * Names that don't exist in the table are ignored.
    */
   dedupeKey?: string[];
+  /**
+   * Whether to compute `projectedScore` by fully re-analysing the patched
+   * table ("full", the default) or to skip that second pass ("none",
+   * projectedScore = score). "none" halves analysis cost for callers that
+   * never show the projection (e.g. a CI residual-score check).
+   */
+  projection?: "full" | "none";
 }
 
 /**

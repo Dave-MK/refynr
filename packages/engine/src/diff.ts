@@ -34,10 +34,34 @@ export interface TableDiff {
   unchanged: number;
 }
 
-/** Pick a stable key column: the first shared column whose values in `before`
- *  are all present and distinct — the closest thing to a primary key. */
-function inferKey(before: Table, shared: string[]): string | null {
-  for (const name of shared) {
+/** Column names that plausibly identify records. */
+const ID_ISH_RE =
+  /(^|[^a-z])(id|ids|uid|ref|reference|code|sku|key|account|acct|no|number|email)([^a-z]|$)/i;
+
+/** True when the column's values are distinct within `table` (empties allowed
+ *  beyond the first check the caller does). */
+function distinctIn(table: Table, name: string): boolean {
+  const idx = table.headers.indexOf(name);
+  if (idx < 0) return false;
+  const seen = new Set<string>();
+  for (const row of table.rows) {
+    const v = row[idx];
+    if (isEmptyCell(v)) continue;
+    const k = cellText(v).trim().toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+  }
+  return true;
+}
+
+/** Pick a stable key column: prefer identifier-named columns, and require the
+ *  values to be present + distinct in `before` AND distinct in `after` — a
+ *  key that collapses on either side silently merges rows in the diff. */
+function inferKey(before: Table, after: Table, shared: string[]): string | null {
+  const ranked = [...shared].sort(
+    (a, b) => (ID_ISH_RE.test(b) ? 1 : 0) - (ID_ISH_RE.test(a) ? 1 : 0),
+  );
+  for (const name of ranked) {
     const idx = before.headers.indexOf(name);
     const seen = new Set<string>();
     let ok = true;
@@ -48,7 +72,13 @@ function inferKey(before: Table, shared: string[]): string | null {
       if (seen.has(k)) { ok = false; break; }
       seen.add(k);
     }
-    if (ok && seen.size === before.rows.length && before.rows.length > 0) return name;
+    if (
+      ok &&
+      seen.size === before.rows.length &&
+      before.rows.length > 0 &&
+      distinctIn(after, name)
+    )
+      return name;
   }
   return null;
 }
@@ -78,7 +108,7 @@ export function diffTables(
   const key =
     keyColumnName && shared.includes(keyColumnName)
       ? keyColumnName
-      : inferKey(before, shared);
+      : inferKey(before, after, shared);
 
   // Column index lookups for the shared columns in each table.
   const cols = shared.map((name) => ({

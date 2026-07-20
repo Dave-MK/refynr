@@ -12,7 +12,30 @@ const NAME_HINTS: Array<[RegExp, string]> = [
   [/(^|[^a-z])(ni|nino|national insurance)([^a-z]|$)/i, "National Insurance numbers"],
   [/(^|[^a-z])(address|addr|street|city|town)([^a-z]|$)/i, "addresses"],
   [/(^|[^a-z])(salary|pay|wage)([^a-z]|$)/i, "salary details"],
+  [/(^|[^a-z])(phone|mobile|tel|telephone)([^a-z]|$)/i, "phone numbers"],
+  [/(^|[^a-z])(card ?(no|num|number)?|pan)([^a-z]|$)/i, "payment card numbers"],
+  [/(^|[^a-z])(name|forename|surname|first ?name|last ?name|full ?name)([^a-z]|$)/i, "names"],
 ];
+
+/** Column names where "name" doesn't mean a person. */
+const NOT_PERSONAL_NAME_RE =
+  /compan|business|organis|organiz|product|brand|item|file|sheet|host|domain|user ?name/i;
+
+/** Luhn checksum — the card-number check every PAN passes. */
+function luhnValid(digits: string): boolean {
+  let sum = 0;
+  let double = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (double) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    double = !double;
+  }
+  return sum % 10 === 0;
+}
 
 const TYPE_LABEL: Partial<Record<string, string>> = {
   email: "email addresses",
@@ -47,22 +70,36 @@ export const piiFixer: Fixer = {
       }
       const hint = NAME_HINTS.find(([re]) => re.test(col.name));
       if (hint) {
-        add(hint[1], col.name);
-        continue;
+        // "Company Name" / "Product name" isn't personal data.
+        if (hint[1] !== "names" || !NOT_PERSONAL_NAME_RE.test(col.name)) {
+          add(hint[1], col.name);
+          continue;
+        }
       }
-      // Content check for NI numbers (they type as plain strings).
-      if (col.type === "string" || col.type === "mixed") {
-        let matches = 0;
+      // Content checks: NI numbers type as plain strings; card PANs type as
+      // numbers — both need a value-level look, on a sample.
+      if (
+        col.type === "string" ||
+        col.type === "mixed" ||
+        col.type === "number"
+      ) {
+        let niMatches = 0;
+        let cardMatches = 0;
         let seen = 0;
         for (const row of table.rows) {
           const v = row[col.index];
           if (isEmptyCell(v)) continue;
           seen++;
-          if (NI_RE.test(cellText(v).trim())) matches++;
+          const text = cellText(v).trim();
+          if (NI_RE.test(text)) niMatches++;
+          const digits = text.replace(/[\s-]/g, "");
+          if (/^\d{13,19}$/.test(digits) && luhnValid(digits)) cardMatches++;
           if (seen >= 200) break; // a sample is plenty for a yes/no signal
         }
-        if (seen >= 4 && matches >= seen * 0.6) {
+        if (seen >= 4 && niMatches >= seen * 0.6) {
           add("National Insurance numbers", col.name);
+        } else if (seen >= 4 && cardMatches >= seen * 0.6) {
+          add("payment card numbers", col.name);
         }
       }
     }

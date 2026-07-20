@@ -359,7 +359,9 @@ describe("health scoring", () => {
 
   it("produces a large, meaningful gain when fixes are accepted", () => {
     const gain = result.projectedScore.overall - result.score.overall;
-    expect(gain).toBeGreaterThanOrEqual(15);
+    // Threshold recalibrated for the geometric composite (was 15 under the
+    // arithmetic mean) — the invariant is "remediation visibly pays off".
+    expect(gain).toBeGreaterThanOrEqual(12);
   });
 
   it("never lets remediation lower the score (stable basis)", () => {
@@ -424,7 +426,7 @@ describe("integrity advisories", () => {
     expect(finding!.patchIds).toEqual([]); // advisory — never auto-fixed
   });
 
-  it("flags far outliers in numeric columns", () => {
+  it("flags far outliers in numeric columns — placeholder constants loudly", () => {
     const table: Table = {
       headers: ["Amount"],
       rows: [["10"], ["12"], ["11"], ["13"], ["9"], ["10"], ["12"], ["11"], ["99999"]],
@@ -434,6 +436,20 @@ describe("integrity advisories", () => {
     );
     expect(finding).toBeDefined();
     expect(finding!.count).toBe(1);
+    // 99999 is a classic missing-data placeholder, not just a big number —
+    // it gets the louder warning tier, not info.
+    expect(finding!.severity).toBe("warning");
+  });
+
+  it("keeps genuine (non-placeholder) outliers at info severity", () => {
+    const table: Table = {
+      headers: ["Amount"],
+      rows: [["10"], ["12"], ["11"], ["13"], ["9"], ["10"], ["12"], ["11"], ["70000"]],
+    };
+    const finding = cleanse(table).findings.find(
+      (f) => f.rule === "numeric-outliers",
+    );
+    expect(finding).toBeDefined();
     expect(finding!.severity).toBe("info");
   });
 
@@ -1198,5 +1214,232 @@ describe("JSON input", () => {
   it("throws a clear error on non-record JSON", () => {
     expect(() => fromJson("42")).toThrow();
     expect(() => fromJson("not json")).toThrow();
+  });
+});
+
+// ── Pressure-test regression battery (Jul 2026 audit fixes) ──────────────────
+
+describe("near-duplicate precision (identifier columns)", () => {
+  it("never flags rows that differ only by an identifier", () => {
+    const rows = Array.from({ length: 23 }, (_, i) =>
+      `C${String(i + 1).padStart(3, "0")},Acme Ltd,Leeds,Pro`);
+    const t = fromDelimitedText("Id,Company,City,Plan\n" + rows.join("\n"));
+    const r = cleanse(t);
+    expect(r.findings.filter((f) => f.rule === "near-duplicate-rows")).toEqual([]);
+    expect(r.score.overall).toBe(100);
+  });
+
+  it("ignores numeric-token differences (transactions are not typos)", () => {
+    const rows = Array.from({ length: 30 }, (_, i) =>
+      `T${1000 + i},cust-42,2024-0${(i % 9) + 1}-1${i % 3},${(i * 7.5 + 10).toFixed(2)}`);
+    const t = fromDelimitedText("TxnId,Customer,Date,Amount\n" + rows.join("\n"));
+    expect(cleanse(t).findings.filter((f) => f.rule === "near-duplicate-rows")).toEqual([]);
+  });
+
+  it("still catches genuine typo near-duplicates", () => {
+    const t = fromDelimitedText(
+      "Name,City\nJohn Smith,Leeds\nJon Smith,Leeds\nJane Doe,York\nBob Jones,Hull",
+    );
+    const nd = cleanse(t).findings.find((f) => f.rule === "near-duplicate-rows");
+    expect(nd).toBeDefined();
+    expect(nd!.patchIds).toEqual([]); // advisory, never auto-removed
+  });
+});
+
+describe("date-order honesty", () => {
+  it("labels an opposite-order read and lowers its confidence", () => {
+    // Column reads DMY (25/12 disambiguates); 12/25 only parses as MDY.
+    const t = fromDelimitedText("D\n25/12/2024\n12/25/2024\n14/03/2024");
+    const r = cleanse(t);
+    const swapped = r.patches.find(
+      (p) => p.kind === "cell" && p.before === "12/25/2024",
+    );
+    expect(swapped).toBeDefined();
+    expect(swapped!.confidence).toBeLessThanOrEqual(0.7);
+    expect(swapped!.reason).toMatch(/mixes date locales/i);
+  });
+
+  it("refuses to guess ambiguous cells in a mixed-order column", () => {
+    const t = fromDelimitedText("D\n25/12/2024\n12/25/2024\n01/02/2024");
+    const r = cleanse(t);
+    // 01/02/2024 must NOT be patched — the column has evidence of both orders.
+    expect(
+      r.patches.some((p) => p.kind === "cell" && p.before === "01/02/2024"),
+    ).toBe(false);
+    const amb = r.findings.find((f) => f.rule === "ambiguous-date");
+    expect(amb).toBeDefined();
+    expect(amb!.patchIds).toEqual([]);
+  });
+
+  it("converts offset-bearing timestamps to the UTC calendar day", () => {
+    const t = fromDelimitedText(
+      "Ts\n2024-03-01T01:15:00+05:00\n2024-03-01T23:30:00-08:00\n2024-03-02T10:00:00",
+    );
+    const r = cleanse(t);
+    const cleaned = applyPatches(t, r.patches, new Set(r.patches.map((p) => p.id)));
+    expect(cleaned.rows.map((row) => row[0])).toEqual([
+      "2024-02-29", // 01:15+05:00 is the previous UTC day
+      "2024-03-02", // 23:30-08:00 is the next UTC day
+      "2024-03-02", // no offset — plain truncation
+    ]);
+  });
+});
+
+describe("missing-value sentinels", () => {
+  const t = fromDelimitedText("A,B\n1,NA\n2,N/A\n3,NULL\n4,-\n5,#N/A\n6,None\n7,9\n8,8");
+
+  it("counts sentinels as missing in the profile and completeness score", () => {
+    const r = cleanse(t);
+    const colB = r.profile.columns[1]!;
+    expect(colB.sentinels).toBe(6);
+    expect(colB.empty).toBe(6);
+    expect(colB.nonEmpty).toBe(2);
+    const completeness = r.score.dimensions.find((d) => d.key === "completeness")!;
+    expect(completeness.score).toBeLessThan(50);
+    expect(r.findings.some((f) => f.rule === "missing-values")).toBe(true);
+  });
+
+  it("offers reviewable blank-out patches for sentinel cells", () => {
+    const r = cleanse(t);
+    const blankouts = r.patches.filter((p) => p.rule === "normalize-missing");
+    expect(blankouts.length).toBe(6);
+    const cleaned = applyPatches(t, r.patches, new Set(blankouts.map((p) => p.id)));
+    expect(cleaned.rows[0]![1]).toBeNull();
+  });
+});
+
+describe("delimiter sniffing and structure", () => {
+  it("parses semicolon- and pipe-delimited text", () => {
+    expect(fromDelimitedText("A;B;C\n1;2;3").headers).toEqual(["A", "B", "C"]);
+    expect(fromDelimitedText("A|B\n1|2").headers).toEqual(["A", "B"]);
+  });
+
+  it("still prefers tabs for spreadsheet pastes containing commas", () => {
+    const t = fromDelimitedText("A\tB\nx,y\tz\nq\tw");
+    expect(t.headers).toEqual(["A", "B"]);
+    expect(t.rows[0]).toEqual(["x,y", "z"]);
+  });
+
+  it("flags ragged rows instead of silently padding", () => {
+    const t = fromDelimitedText("A,B\n1,2\n1,2,3\n4");
+    expect(t.parseIssues?.raggedRows).toBe(2);
+    const finding = cleanse(t).findings.find((f) => f.rule === "ragged-rows");
+    expect(finding).toBeDefined();
+    expect(finding!.patchIds).toEqual([]);
+  });
+});
+
+describe("score curve behaviour", () => {
+  const dupRow = (n: number, dups: number) =>
+    fromDelimitedText(
+      "A,B\n" +
+        Array.from({ length: n }, (_, i) => (i < dups ? "1,2" : `${i},${i}`)).join("\n"),
+    );
+
+  it("is monotone in duplicate share — no cliff, no flat tail", () => {
+    const scores = [2, 10, 21, 50, 90].map((d) => cleanse(dupRow(100, d)).score.overall);
+    for (let i = 1; i < scores.length; i++) {
+      expect(scores[i]!).toBeLessThanOrEqual(scores[i - 1]!);
+    }
+    // 21% vs 90% duplicates must be distinguishable (the old cap made both 80).
+    expect(scores[2]!).toBeGreaterThan(scores[4]!);
+  });
+
+  it("does not let three clean dimensions mask a catastrophic one", () => {
+    expect(cleanse(dupRow(100, 90)).score.overall).toBeLessThanOrEqual(50);
+  });
+});
+
+describe("audit report counts distinct units", () => {
+  it("counts cells changed, not patches applied", () => {
+    // Trim + email normalisation both patch the same cell.
+    const t = fromDelimitedText("Email\n  JOHN@ACME.COM  \n  jane@acme.com  ");
+    const r = cleanse(t);
+    const report = buildReport(r, new Set(r.patches.map((p) => p.id)));
+    expect(report.cellsChanged).toBe(2);
+    expect(report.patchesApplied).toBeGreaterThan(2);
+  });
+});
+
+describe("PII coverage extensions", () => {
+  it("detects card numbers by Luhn and names by header, not IPs as phones", () => {
+    const rows = Array.from({ length: 6 }, (_, i) =>
+      `Person ${i},4111111111111111,192.168.1.${i}`);
+    const t = fromDelimitedText("FullName,CardNo,IP\n" + rows.join("\n"));
+    const pii = cleanse(t).findings.find((f) => f.rule === "pii-present");
+    expect(pii).toBeDefined();
+    expect(pii!.detail).toMatch(/payment card numbers/);
+    expect(pii!.detail).toMatch(/names/);
+    expect(pii!.detail).not.toMatch(/phone numbers/);
+  });
+
+  it("does not treat company names as personal data", () => {
+    const t = fromDelimitedText("Company Name,Value\nAcme Ltd,1\nGlobex,2\nInitech,3\nUmbrella,4");
+    const pii = cleanse(t).findings.find((f) => f.rule === "pii-present");
+    expect(pii?.detail ?? "").not.toMatch(/names \("Company Name"\)/);
+  });
+});
+
+describe("skew-aware outliers", () => {
+  it("log-fences right-skewed data so the mid-tail isn't flagged", () => {
+    const salaries = [22000, 24000, 25000, 26000, 27000, 28000, 30000, 32000, 35000, 40000, 45000, 60000, 85000, 250000];
+    const t = fromDelimitedText("Salary\n" + salaries.join("\n"));
+    const finding = cleanse(t).findings.find((f) => f.rule === "numeric-outliers");
+    // Under the old raw-IQR fence BOTH 85k and 250k were flagged. On the log
+    // scale 85k is inside the tail; only the extreme point remains.
+    expect(finding).toBeDefined();
+    expect(finding!.count).toBe(1);
+    expect(finding!.detail).toContain("250,000");
+    expect(finding!.detail).not.toContain("85,000");
+  });
+});
+
+describe("Excel damage detection", () => {
+  it("spots date-converted identifiers and scientific-notation IDs", () => {
+    const t = fromDelimitedText(
+      "Gene,Barcode Id\nTP53,123456\nBRCA1,234567\n2-Sep,2.31E+13\nMYC,345678\nKRAS,456789",
+    );
+    const findings = cleanse(t).findings;
+    expect(findings.some((f) => f.rule === "excel-date-artifact")).toBe(true);
+    expect(findings.some((f) => f.rule === "excel-scientific-notation")).toBe(true);
+  });
+});
+
+describe("engine version pinning in recipes", () => {
+  it("stamps new recipes and preserves the original on parse", () => {
+    const recipe = createRecipe("Monthly");
+    expect(recipe.engineVersion).toBeTruthy();
+    const older = { ...recipe, engineVersion: "0.0.1" };
+    expect(parseRecipe(JSON.stringify(older)).engineVersion).toBe("0.0.1");
+  });
+});
+
+describe("projection option", () => {
+  it("skips the second analysis pass when projection is none", () => {
+    const t = fromDelimitedText("A\n  x \n y ");
+    const r = cleanse(t, { projection: "none" });
+    expect(r.projectedScore).toEqual(r.score);
+    // Full projection on the same table improves on the current score.
+    const full = cleanse(t);
+    expect(full.projectedScore.overall).toBeGreaterThan(full.score.overall);
+  });
+});
+
+describe("diff key inference hardening", () => {
+  it("prefers an identifier-named column and requires uniqueness both sides", () => {
+    const before = fromDelimitedText("Name,Id\nAnn,1\nBob,2\nCat,3");
+    const after = fromDelimitedText("Name,Id\nAnn,1\nBob,2\nDan,4");
+    expect(diffTables(before, after).keyColumn).toBe("Id");
+  });
+
+  it("never drops rows even when keys are messy", () => {
+    const before = fromDelimitedText("Id,V\n1,a\n1,b\n2,c");
+    const after = fromDelimitedText("Id,V\n1,a\n1,z\n2,c");
+    const d = diffTables(before, after);
+    // Duplicate Ids disqualify Id as the key. Whatever key (or positional
+    // fallback) is used, every row on each side must be accounted for.
+    expect(d.keyColumn).not.toBe("Id");
+    expect(d.added.length + d.changed.length + d.unchanged).toBe(after.rows.length);
+    expect(d.removed.length + d.changed.length + d.unchanged).toBe(before.rows.length);
   });
 });

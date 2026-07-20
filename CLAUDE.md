@@ -17,6 +17,41 @@ pnpm --filter @refynr/cli build         # build the headless CLI
 node packages/cli/dist/cli.js --help    # CLI: `clean` + `diff`, CI gates
 ```
 
+## Engine invariants added by the Jul-2026 audit fixes (don't regress)
+
+- **Sentinel nulls** (`isMissingSentinel` in `table.ts`): NA/N-A/NULL/None/
+  nan/nil/-/-- count as missing everywhere — profile (`empty` includes them,
+  `sentinels` counts them), completeness score, and reviewable blank-out
+  patches (`normalize-missing`, info severity, deliberately NOT score-mapped
+  to avoid double-counting with `missing-values`).
+- **Delimiter sniffing** (`fromDelimitedText`): tab/comma/semicolon/pipe by
+  modal-width consistency; tab wins ties (spreadsheet paste). Non-empty rows
+  whose field count ≠ header's land in `Table.parseIssues.raggedRows` → the
+  advisory `ragged-rows` finding (carried through to the projected score —
+  no patch can fix source structure).
+- **Near-dup typo evidence** (`duplicates.ts`): identifier-ish columns
+  (distinct/nonEmpty ≥ 0.9 with ≥10 rows, or id-named + all-distinct) and
+  digit-only tokens are EXCLUDED from the context fingerprint; identical
+  contexts never union (ID-differs = distinct records, dedupeKey territory);
+  fingerprints under 6 chars carry no typo evidence. Full-fingerprint
+  collision clustering (word reorder/punctuation) is unchanged.
+- **Date honesty** (`dates.ts`): a value parseable only in the opposite order
+  gets confidence 0.7 + a "mixes date locales" reason; in auto mode a column
+  with unambiguous evidence of BOTH orders flags its ambiguous cells
+  (`ambiguous-date`, advisory) instead of guessing; offset-bearing timestamps
+  convert to the UTC calendar day before truncation.
+- **Scoring** (`score.ts`): dimensions use the smooth penalty
+  `100·(1−rate)^sensitivity` (no min(1,…) cliff — monotone, rankable);
+  the composite is a weighted GEOMETRIC mean (scores floored at 1) so a
+  cratered dimension can't be averaged away; `near-duplicate-rows` carries a
+  0.4 rule-weight dampener (probabilistic signal, not confirmed defect).
+- **`EngineOptions.projection: "none"`** skips the projected-score second
+  pass (CLI residual checks use it; the web UI needs "full").
+- **Audit counts distinct units**: `buildReport` counts distinct cells/rows
+  touched, never patches (two rules can patch one cell).
+- Recipes carry `engineVersion` (`ENGINE_VERSION` in `recipe.ts` — bump it
+  when fixer behaviour changes; `parseRecipe` preserves the original).
+
 ## Engine capabilities beyond fixers
 
 The engine (`packages/engine`) also exports, all pure and deterministic:
