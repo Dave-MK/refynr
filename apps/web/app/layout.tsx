@@ -7,7 +7,7 @@ const siteUrl =
   (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
 
 const description =
-  "Clean messy spreadsheets in your browser. A data health score, explained fixes you accept one by one, and a full audit trail — your data never leaves your device.";
+  "Clean messy spreadsheets entirely in your browser — CSV, Excel, JSON and Parquet. A data health score, explained fixes you review one by one, version diffs, replayable cleaning recipes, and an audit report to prove what changed. Your data never leaves your device.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -20,8 +20,12 @@ export const metadata: Metadata = {
     "data cleaning",
     "spreadsheet cleaner",
     "CSV cleaner",
+    "Excel cleaner",
     "data quality",
     "deduplicate",
+    "CSV diff",
+    "data audit trail",
+    "data cleaning recipes",
     "UK postcode validation",
     "privacy-first",
   ],
