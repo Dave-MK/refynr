@@ -187,6 +187,9 @@ export default function Home() {
   // ("which of these am I joining to?") — a file loaded for one is available to
   // the other without loading it twice.
   const [datasets, setDatasets] = useState<LoadedDataset[]>([]);
+  /** Mirrors `datasets.length` so a load can know its own index without
+   *  reading state from inside a setState updater. */
+  const datasetCount = useRef(0);
   // Index into `datasets` currently shown in the diff view, or null for none.
   const [compareIndex, setCompareIndex] = useState<number | null>(null);
   const [showJoin, setShowJoin] = useState(false);
@@ -320,14 +323,16 @@ export default function Home() {
       }
       if (msg.tag === "compare") {
         // Lands in the shared dataset store; the intent decides what opens.
-        setDatasets((prev) => {
-          const next = [...prev, { name: pendingCompareName.current, table: msg.table }];
-          if (secondaryIntent.current === "compare") setCompareIndex(next.length - 1);
-          else if (secondaryIntent.current === "join") setShowJoin(true);
-          // "recipe-join": the file a waiting recipe was blocked on — the
-          // effect below finishes the recipe now that its dataset exists.
-          return next;
-        });
+        // The index this dataset will occupy. Tracked in a ref rather than
+        // read inside the setDatasets updater: calling other setState functions
+        // from within an updater is unsupported, and React's dev-mode double
+        // invocation made the panel open only intermittently.
+        const index = datasetCount.current;
+        datasetCount.current += 1;
+        setDatasets((prev) => [...prev, { name: pendingCompareName.current, table: msg.table }]);
+        if (secondaryIntent.current === "compare") setCompareIndex(index);
+        else if (secondaryIntent.current === "join") setShowJoin(true);
+        // "recipe-join": the effect below finishes the waiting recipe.
         setError(null);
         return;
       }
@@ -347,6 +352,7 @@ export default function Home() {
       setSheetName(msg.sheetName ?? null);
       // A fresh dataset invalidates any prior comparison and join context.
       setDatasets([]);
+      datasetCount.current = 0;
       setCompareIndex(null);
       setShowJoin(false);
       setJoinFindings([]);
@@ -1234,6 +1240,7 @@ export default function Home() {
                 setBase(null);
                 setPasted("");
                 setDatasets([]);
+                datasetCount.current = 0;
                 setCompareIndex(null);
                 setShowJoin(false);
                 setJoinFindings([]);
@@ -1624,9 +1631,12 @@ export default function Home() {
             />
             <button
               onClick={() => {
+                // Always ask for a file. Reusing an already-loaded dataset
+                // instead would mean that once ANY second file existed (say the
+                // one you joined with), Compare could never open another —
+                // silently diffing against a file you didn't choose.
                 secondaryIntent.current = "compare";
-                if (datasets.length > 0) setCompareIndex(datasets.length - 1);
-                else compareInput.current?.click();
+                compareInput.current?.click();
               }}
               title="Compare this dataset against another version"
               className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"

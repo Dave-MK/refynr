@@ -1,13 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  groupBy,
-  numericValue,
-  type AggFn,
-  type Aggregation,
-  type Table,
-} from "@refynr/engine";
+import { groupBy, type AggFn, type Aggregation, type Table } from "@refynr/engine";
+import { suggestGroupColumn, suggestValueColumn } from "@/lib/summarise-defaults";
 
 const FNS: ReadonlyArray<readonly [AggFn, string]> = [
   ["count", "Count rows"],
@@ -18,29 +13,6 @@ const FNS: ReadonlyArray<readonly [AggFn, string]> = [
   ["max", "Highest"],
   ["count-distinct", "Distinct values"],
 ];
-
-/**
- * Pick a sensible column to total. Defaulting to the first header hands you
- * "Sum of region" — a total of the very column you grouped by — so prefer a
- * column that isn't a grouping key and whose values actually read as numbers.
- */
-function suggestValueColumn(table: Table, by: string[]): string {
-  const candidates = table.headers.filter((h) => !by.includes(h));
-  const sample = table.rows.slice(0, 20);
-  for (const h of candidates) {
-    const col = table.headers.indexOf(h);
-    let numeric = 0;
-    let seen = 0;
-    for (const row of sample) {
-      const v = row[col] ?? null;
-      if (v === null || String(v).trim() === "") continue;
-      seen++;
-      if (numericValue(v) !== null) numeric++;
-    }
-    if (seen > 0 && numeric / seen >= 0.8) return h;
-  }
-  return candidates[0] ?? table.headers[0] ?? "";
-}
 
 /**
  * The summarise builder. Like the join panel, its job is to show what the
@@ -56,7 +28,7 @@ export function GroupPanel({
   onApply: (by: string[], aggregations: Aggregation[]) => void;
   onClose: () => void;
 }) {
-  const [by, setBy] = useState<string[]>(() => working.headers.slice(0, 1));
+  const [by, setBy] = useState<string[]>(() => suggestGroupColumn(working));
   const [aggs, setAggs] = useState<Aggregation[]>([{ fn: "count" }]);
 
   const preview = useMemo(() => {
