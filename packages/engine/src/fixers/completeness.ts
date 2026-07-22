@@ -1,6 +1,13 @@
-import type { CellPatch, Finding, Patch } from "../types.js";
-import { cellText, isMissingSentinel } from "../table.js";
-import { cellPatchId, n, verb, type Fixer, type FixerOutput } from "./fixer.js";
+import type { CellPatch, CellRef, Finding, Patch } from "../types.js";
+import { cellText, isEmptyCell, isMissingSentinel } from "../table.js";
+import {
+  cellPatchId,
+  MAX_FINDING_CELLS,
+  n,
+  verb,
+  type Fixer,
+  type FixerOutput,
+} from "./fixer.js";
 
 const BLANK_RULE = "remove-blank-rows";
 const MISSING_RULE = "missing-values";
@@ -35,8 +42,10 @@ export const completenessFixer: Fixer = {
       });
     });
 
+    const blankRows = new Set<number>();
     table.rows.forEach((row, r) => {
       if (row.length > 0 && row.every((v) => cellText(v).trim() === "")) {
+        blankRows.add(r);
         patches.push({
           kind: "remove-row",
           id: `${BLANK_RULE}:${r}`,
@@ -89,6 +98,19 @@ export const completenessFixer: Fixer = {
           col.sentinels > 0
             ? ` (${col.sentinels} of them written as placeholders like "NA")`
             : "";
+        // The gaps themselves, in row order, so the UI can jump to the first
+        // one and ring the rest. Rows already slated for removal are skipped:
+        // they're not what the count is about, and sending the user to a row
+        // that's about to disappear is a false lead.
+        const cells: CellRef[] = [];
+        for (let r = 0; r < table.rows.length; r++) {
+          if (cells.length >= MAX_FINDING_CELLS) break;
+          if (blankRows.has(r)) continue;
+          const v = table.rows[r]?.[col.index] ?? null;
+          if (isEmptyCell(v) || isMissingSentinel(v)) {
+            cells.push({ row: r, col: col.index });
+          }
+        }
         findings.push({
           rule: MISSING_RULE,
           severity: pct >= 25 ? "error" : "warning",
@@ -96,6 +118,7 @@ export const completenessFixer: Fixer = {
           detail: `The "${col.name}" column is missing ${missing} of ${rowCount} values${sentinelNote}. Refynr never fabricates data — decide whether these rows should be excluded, back-filled from a source system, or are legitimately blank.`,
           count: missing,
           column: col.index,
+          cells,
           patchIds: [],
         });
       }

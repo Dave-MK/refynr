@@ -1308,6 +1308,51 @@ describe("missing-value sentinels", () => {
   });
 });
 
+describe("locatable advisory findings", () => {
+  it("points the missing-values finding at the gaps, skipping blank rows", () => {
+    //            row 0      row 1        row 2 (blank)  row 3      row 4
+    const t = fromDelimitedText("A,B\n1,\n2,NA\n,\n4,x\n5,y");
+    const finding = cleanse(t).findings.find((f) => f.rule === "missing-values");
+    expect(finding).toBeDefined();
+    expect(finding!.column).toBe(1);
+    expect(finding!.count).toBe(2);
+    // The true blank and the "NA" sentinel; the all-blank row is a removal
+    // patch, not a gap worth visiting.
+    expect(finding!.cells).toEqual([
+      { row: 0, col: 1 },
+      { row: 1, col: 1 },
+    ]);
+  });
+
+  it("caps the cell list on a big gappy column but keeps the first gap", () => {
+    // 1500 gaps, then enough populated rows that the column isn't type-empty.
+    const rows = Array.from({ length: 1600 }, (_, i) =>
+      i < 1500 ? `${i},` : `${i},v${i}`);
+    const t = fromDelimitedText("A,B\n" + rows.join("\n"));
+    const finding = cleanse(t).findings.find((f) => f.rule === "missing-values");
+    expect(finding!.count).toBe(1500);
+    expect(finding!.cells!.length).toBeGreaterThan(0);
+    expect(finding!.cells!.length).toBeLessThanOrEqual(1000);
+    expect(finding!.cells![0]).toEqual({ row: 0, col: 1 });
+  });
+
+  it("points the personal-data notice at the columns it names", () => {
+    const table: Table = {
+      headers: ["Email", "NI Number", "Widgets"],
+      rows: Array.from({ length: 6 }, (_, i) => [
+        `user${i}@ex.co.uk`,
+        `QQ 12 34 5${i} C`,
+        i,
+      ]),
+    };
+    const finding = cleanse(table).findings.find((f) => f.rule === "pii-present");
+    const cols = new Set(finding!.cells!.map((c) => c.col));
+    expect([...cols].sort()).toEqual([0, 1]); // not "Widgets"
+    expect(finding!.cells!.some((c) => c.row === 0 && c.col === 0)).toBe(true);
+    expect(finding!.cells!.length).toBe(12); // 6 populated rows × 2 columns
+  });
+});
+
 describe("delimiter sniffing and structure", () => {
   it("parses semicolon- and pipe-delimited text", () => {
     expect(fromDelimitedText("A;B;C\n1;2;3").headers).toEqual(["A", "B", "C"]);
