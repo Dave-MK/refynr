@@ -59,6 +59,15 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
   / `runRecipe`. A recipe is re-runnable config (options + skipped rules +
   constraints) with **no cell data** — safe to store/share. Web shell keeps a
   browser-local library (`apps/web/lib/recipes.ts`); the CLI replays them.
+  **`RECIPE_VERSION` is 2** (added optional `join`). `parseRecipe` migrates
+  anything from `OLDEST_READABLE_VERSION` (1) forward and only rejects recipes
+  from a *newer* build — bumping the version must never orphan saved recipes,
+  since `loadRecipes` silently drops entries that fail to parse. A recipe's
+  `join` stores the join's SHAPE only (key names + type + a `with` label), never
+  the other dataset, so the "no cell data" guarantee holds; the dataset is
+  supplied at replay (`runRecipe(table, recipe, joinWith)`, `--join-with` on the
+  CLI). `runRecipe` THROWS when a join recipe gets no dataset rather than
+  quietly cleaning an unjoined table.
 - **Expectations** (`expectations.ts`): `checkConstraints` — user-defined
   pass/fail rules (`Constraint`: not-null/unique/regex/range/allowed-values),
   threaded via `EngineOptions.constraints`. Advisory only (never auto-fix).
@@ -74,6 +83,23 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
 - **Dataset diff** (`diff.ts`): `diffTables(before, after, key?)` — value-level
   added/removed/changed/unchanged, key inferred or given. The "what changed
   since last export?" wedge.
+- **Relational join** (`join.ts`): `joinTables(left, right, options)` →
+  `{ table, diagnostics, findings }`, plus `inferJoinKeys`. Shape change, so a
+  NEW table (like `transform.ts`), never patches. The value is the **diagnosis**,
+  not the join: every unmatched left row is retested against progressively laxer
+  right-hand keys, so a miss is labelled `zero-padding` / `numeric-format` /
+  `punctuation` (fixable formatting difference, with the key it *would* have
+  matched) rather than lumped in with `absent` (genuinely missing record) or
+  `empty-key` (blank/sentinel key). Fan-out (1:many row multiplication) and
+  matches that only survived case/whitespace folding are reported too. All
+  findings are `patchIds: []` — a join problem is fixed by better keys or a
+  cleaner key column, never by inventing a match; and they are deliberately NOT
+  score-mapped (an unmatched row's empty cells are already counted by
+  completeness). Key inference ranks shared columns by overlap measured on a
+  LOOSE form, so a column pair that only lines up once formatting noise is
+  ignored is still chosen — letting the join explain the mismatch instead of
+  refusing with "no column to join on". Composite keys join on NUL
+  (`String.fromCharCode(0)`) so parts can't run together.
 - **Run report** (`report.ts`): `buildReport` / `reportToMarkdown` — shareable
   audit of what changed, from patch metadata.
 - **NL commands** (`nl.ts`): `parseInstruction` — deterministic, in-browser
@@ -92,8 +118,8 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
 - **Parquet input** (web shell only): the cleanse worker reads Parquet via
   `hyparquet` (pure JS, no WASM) → `Table`, capped at 100k rows/session with a
   disclosed banner. Not in the engine — engine stays zero-dep.
-- **`@refynr/cli`**: headless `clean` (recipes, `--min-score` CI gate,
-  `--report`, `--json`) and `diff` (`--key`, `--fail-on-change`). Reads CSV/TSV/
+- **`@refynr/cli`**: headless `clean` (recipes, `--join-with`, `--min-score` CI
+  gate, `--report`, `--json`) and `diff` (`--key`, `--fail-on-change`). Reads CSV/TSV/
   JSON/Parquet (`--limit` caps rows). Its only deps are the engine + hyparquet;
   Node types are local ambient decls (`node-min.d.ts`), no `@types/node`.
 - **Web diff view** (`DatasetDiff.tsx`): the browser shell for `diffTables` —

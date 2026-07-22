@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { inferJoinKeys, joinTables } from "../src/index.js";
+import {
+  createRecipe,
+  inferJoinKeys,
+  joinTables,
+  parseRecipe,
+  runRecipe,
+  serializeRecipe,
+} from "../src/index.js";
 import type { Table } from "../src/index.js";
 
 /** Small helper — builds a Table from a header row plus data rows. */
@@ -249,5 +256,77 @@ describe("joinTables — scale", () => {
     expect(table.rows.length).toBe(60_000);
     expect(diagnostics.matched).toBe(60_000);
     expect(diagnostics.unmatchedLeft.length).toBe(0);
+  });
+});
+
+describe("recipes carrying a join", () => {
+  const left = t(["id", "name"], ["1", "Ann"], ["2", "Bob"]);
+  const right = t(["id", "total"], ["1", 10], ["2", 20]);
+  const join = {
+    with: "orders.csv",
+    keys: [{ left: "id", right: "id" }],
+    type: "left" as const,
+  };
+
+  it("round-trips the join through serialise/parse, carrying no cell data", () => {
+    const recipe = createRecipe("Monthly", {}, [], undefined, join);
+    const json = serializeRecipe(recipe);
+    expect(json).not.toContain("Ann"); // no cell data ever
+    const back = parseRecipe(json);
+    expect(back.join).toEqual(join);
+  });
+
+  it("replays the join before cleaning", () => {
+    const recipe = createRecipe("Monthly", {}, [], undefined, join);
+    const run = runRecipe(left, recipe, right);
+    expect(run.cleaned.headers).toEqual(["id", "name", "total"]);
+    expect(run.cleaned.rows.length).toBe(2);
+    expect(run.joinFindings).toEqual([]);
+  });
+
+  it("refuses to clean without the dataset the join needs", () => {
+    const recipe = createRecipe("Monthly", {}, [], undefined, join);
+    // Silently cleaning the unjoined table would score a different table as
+    // if it were the one the recipe describes.
+    expect(() => runRecipe(left, recipe)).toThrow(/orders\.csv/);
+  });
+
+  it("still runs join-less recipes with no second table", () => {
+    const recipe = createRecipe("Plain");
+    expect(recipe.join).toBeUndefined();
+    expect(() => runRecipe(left, recipe)).not.toThrow();
+  });
+
+  it("migrates a v1 recipe forward instead of rejecting it", () => {
+    const v1 = JSON.stringify({
+      version: 1,
+      name: "Old one",
+      options: { disabledRules: [] },
+      skipRules: ["normalize-date"],
+    });
+    const parsed = parseRecipe(v1);
+    expect(parsed.version).toBe(2);
+    expect(parsed.skipRules).toEqual(["normalize-date"]);
+  });
+
+  it("still rejects a recipe from a newer refynr", () => {
+    const future = JSON.stringify({
+      version: 99,
+      name: "From the future",
+      options: {},
+      skipRules: [],
+    });
+    expect(() => parseRecipe(future)).toThrow(/newer version/);
+  });
+
+  it("rejects a malformed join rather than dropping it", () => {
+    const bad = JSON.stringify({
+      version: 2,
+      name: "Broken",
+      options: {},
+      skipRules: [],
+      join: { with: "x.csv", type: "sideways", keys: [] },
+    });
+    expect(() => parseRecipe(bad)).toThrow(/doesn't look like/);
   });
 });

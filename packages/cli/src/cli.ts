@@ -38,6 +38,8 @@ Usage:
 
 clean — analyse a file and write a cleaned copy:
   --recipe <file>        Apply a saved recipe (.json) instead of all default fixes
+  --join-with <file>     Dataset to join before cleaning, when the recipe has a
+                         join step (a recipe stores the join's shape, not its data)
   --out <file>           Write the cleaned copy here (default: stdout as CSV)
   --report <file>        Write a Markdown audit report of what changed
   --min-score <0-100>    Exit non-zero if the cleaned data scores below this (CI gate)
@@ -192,6 +194,23 @@ async function main(): Promise<number> {
     return 1;
   }
 
+  // A recipe carrying a join needs the other dataset supplied here — it stores
+  // the join's shape, never its data.
+  const joinPath = flag(argv, "--join-with");
+  let joinTable: Table | undefined;
+  if (joinPath) {
+    if (!existsSync(joinPath)) {
+      err(`Error: file not found: ${joinPath}`);
+      return 1;
+    }
+    try {
+      joinTable = await loadTable(joinPath, limit);
+    } catch (e) {
+      err(`Error reading ${joinPath}: ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    }
+  }
+
   const recipePath = flag(argv, "--recipe");
   let cleaned: Table;
   let result: ReturnType<typeof cleanse>;
@@ -200,11 +219,16 @@ async function main(): Promise<number> {
   try {
     if (recipePath) {
       const recipe = parseRecipe(readFileSync(recipePath, "utf8"));
-      const run = runRecipe(table, recipe);
+      const run = runRecipe(table, recipe, joinTable);
       result = run.result;
       acceptedIds = run.acceptedIds;
       cleaned = run.cleaned;
       err(`Applied recipe "${recipe.name}".`);
+      // The join's diagnosis is the part a CI log most needs to see: an
+      // unmatched-rows spike is how a broken upstream key shows up.
+      for (const f of run.joinFindings ?? []) {
+        err(`  ${f.severity === "info" ? "note" : "warn"}: ${f.title}`);
+      }
     } else {
       result = cleanse(table);
       acceptedIds = new Set(result.patches.map((p) => p.id));

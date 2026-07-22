@@ -59,6 +59,7 @@ export {
   isRecipe,
   runRecipe,
   type Recipe,
+  type RecipeJoin,
   type RecipeRun,
 } from "./recipe.js";
 export { parseInstruction, type Instruction } from "./nl.js";
