@@ -63,6 +63,18 @@ export {
 } from "./recipe.js";
 export { parseInstruction, type Instruction } from "./nl.js";
 export {
+  joinTables,
+  inferJoinKeys,
+  type JoinType,
+  type JoinKey,
+  type JoinOptions,
+  type JoinResult,
+  type JoinDiagnostics,
+  type UnmatchedRow,
+  type FanOutRow,
+  type MissReason,
+} from "./join.js";
+export {
   splitColumn,
   mergeColumns,
   unpivot,
