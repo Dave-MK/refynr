@@ -142,6 +142,10 @@ export function FindingsPanel({
         <ul className="divide-y divide-line/60">
           {visible.map(([f, i]) => {
             const fixable = f.patchIds.length > 0;
+            // Some findings describe an operation rather than a place in the
+            // table (a join's unmatched rows, say) and point at no cells.
+            // Offering "locate" on those promises a jump that can't happen.
+            const locatable = fixable || (f.cells?.length ?? 0) > 0;
             const pill = pillFor(f);
             return (
               <li
@@ -152,16 +156,21 @@ export function FindingsPanel({
               >
                 <button
                   type="button"
-                  onClick={() => onLocate(i)}
-                  title="Show these cells in the table"
-                  className="group min-w-0 flex-1 rounded-md text-left transition hover:bg-line/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal/40"
+                  onClick={() => locatable && onLocate(i)}
+                  title={locatable ? "Show these cells in the table" : undefined}
+                  aria-disabled={!locatable}
+                  className={`group min-w-0 flex-1 rounded-md text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-teal/40 ${
+                    locatable ? "hover:bg-line/25" : "cursor-default"
+                  }`}
                 >
                   <div className="flex flex-wrap items-center gap-2.5">
                     <span className="text-[13.5px] font-semibold text-hi">{f.title}</span>
                     <span className={`pill ${pill.className}`}>{pill.text}</span>
-                    <span className="font-mono text-[10px] text-dim opacity-0 transition group-hover:opacity-100">
-                      ⌖ locate
-                    </span>
+                    {locatable && (
+                      <span className="font-mono text-[10px] text-dim opacity-0 transition group-hover:opacity-100">
+                        ⌖ locate
+                      </span>
+                    )}
                   </div>
                   <p className="mt-0.5 max-w-[85ch] text-[12.5px] leading-snug text-mut">{f.detail}</p>
                 </button>

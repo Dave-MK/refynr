@@ -8,6 +8,7 @@ import {
   deleteColumn,
   deleteRows,
   findReplace,
+  joinTables,
   mergeColumns,
   reportToHtml,
   reportToMarkdown,
@@ -19,6 +20,8 @@ import {
   type CleanseResult,
   type EngineOptions,
   type Finding,
+  type JoinKey,
+  type JoinType,
   type Recipe,
   type Table,
 } from "@refynr/engine";
@@ -33,6 +36,7 @@ import { Landing } from "@/components/Landing";
 import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
 import { DatasetDiff } from "@/components/DatasetDiff";
+import { JoinPanel, type LoadedDataset } from "@/components/JoinPanel";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
 import { downloadBlob, downloadCsv, downloadJson, downloadTsv, toTsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
@@ -166,12 +170,27 @@ export default function Home() {
         snap: (typeof undoStack.current)[number];
         /** Options the worker is analysing with — becomes baseOptionsKey. */
         optionsKey: string;
+        /** Advisory findings the transform produced (joins); [] for the rest. */
+        joinFindings: Finding[];
       }
   >(null);
-  // Version-comparison state — a second file to diff the loaded one against.
   const [baseName, setBaseName] = useState("data");
-  const [compareTable, setCompareTable] = useState<Table | null>(null);
-  const [compareName, setCompareName] = useState("");
+  // Secondary datasets loaded alongside the working one. One store serves both
+  // the version diff ("which of these am I comparing against?") and the join
+  // ("which of these am I joining to?") — a file loaded for one is available to
+  // the other without loading it twice.
+  const [datasets, setDatasets] = useState<LoadedDataset[]>([]);
+  // Index into `datasets` currently shown in the diff view, or null for none.
+  const [compareIndex, setCompareIndex] = useState<number | null>(null);
+  const [showJoin, setShowJoin] = useState(false);
+  // Why the pending secondary file is being loaded, so the right surface opens
+  // when it lands.
+  const secondaryIntent = useRef<"compare" | "join">("compare");
+  // Advisory findings from the join that produced the current base table. Held
+  // separately from the engine's result because they describe the OPERATION,
+  // not the table's intrinsic quality — and so they survive the re-cleanse that
+  // the join's new base triggers.
+  const [joinFindings, setJoinFindings] = useState<Finding[]>([]);
   // "Copy" button feedback, drag-over highlight, and finding→cell locating.
   const [copied, setCopied] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -208,6 +227,9 @@ export default function Home() {
       skipRules: Set<string>;
       options: EngineOptions;
       manualEdits: Map<string, CellValue>;
+      /** Join diagnosis attached to this base table, so undoing a join takes
+       *  its findings away with it. */
+      joinFindings: Finding[];
     }[]
   >([]);
   const [undoDepth, setUndoDepth] = useState(0);
@@ -254,6 +276,7 @@ export default function Home() {
           setBaseOptionsKey(intent.optionsKey);
           setAnalysedAt(Date.now());
           setManualEdits(new Map());
+          setJoinFindings(intent.joinFindings);
           setAsyncResult(null);
           setPinnedKeys(new Set());
           setHoverKeys(null);
@@ -279,8 +302,13 @@ export default function Home() {
         return;
       }
       if (msg.tag === "compare") {
-        setCompareTable(msg.table);
-        setCompareName(pendingCompareName.current);
+        // Lands in the shared dataset store; the intent decides what opens.
+        setDatasets((prev) => {
+          const next = [...prev, { name: pendingCompareName.current, table: msg.table }];
+          if (secondaryIntent.current === "compare") setCompareIndex(next.length - 1);
+          else setShowJoin(true);
+          return next;
+        });
         setError(null);
         return;
       }
@@ -298,8 +326,11 @@ export default function Home() {
       setTruncated(msg.truncated ?? null);
       setSheets(msg.sheets ?? []);
       setSheetName(msg.sheetName ?? null);
-      setCompareTable(null); // a fresh dataset invalidates any prior comparison
-      setCompareName("");
+      // A fresh dataset invalidates any prior comparison and join context.
+      setDatasets([]);
+      setCompareIndex(null);
+      setShowJoin(false);
+      setJoinFindings([]);
       setPinnedKeys(new Set());
       setHoverKeys(null);
       setScrollToKey(null);
@@ -349,7 +380,9 @@ export default function Home() {
     [analyse, submit],
   );
 
-  // Load a second file to compare the current dataset against (version diff).
+  // Load a second file into the shared dataset store. `secondaryIntent` (set by
+  // whichever button opened the picker) decides whether the diff or the join
+  // panel opens once it lands.
   const onCompareFile = useCallback(
     async (file: File) => {
       pendingCompareName.current = file.name;
@@ -385,12 +418,25 @@ export default function Home() {
   const optionsKey = JSON.stringify(options);
   const needsRecleanse = manualEdits.size > 0 || optionsKey !== baseOptionsKey;
 
-  const result = useMemo(() => {
+  const engineResult = useMemo(() => {
     if (!base) return null;
     if (!needsRecleanse) return base.result;
     if (isBig) return asyncResult?.result ?? base.result;
     return cleanse(working!, options);
   }, [base, needsRecleanse, isBig, asyncResult, working, options]);
+
+  // The join's diagnosis rides alongside the engine's own findings so it lands
+  // in the findings list, the audit report and the score card's "left for
+  // review" count without any of them needing to know joins exist. Safe because
+  // every join finding is advisory (patchIds: []): the accept/patch machinery
+  // skips them, and the score is untouched — a joined row that arrived empty is
+  // already counted by the completeness dimension, so scoring the join as well
+  // would penalise the same gap twice.
+  const result = useMemo(() => {
+    if (!engineResult) return null;
+    if (joinFindings.length === 0) return engineResult;
+    return { ...engineResult, findings: [...engineResult.findings, ...joinFindings] };
+  }, [engineResult, joinFindings]);
 
   // A transform that never landed (superseded by a newer action before its
   // worker analysis returned) must not leave its snapshot in the history —
@@ -506,11 +552,12 @@ export default function Home() {
         skipRules: new Set(skipRules),
         options,
         manualEdits: new Map(manualEdits),
+        joinFindings,
       });
       if (undoStack.current.length > 50) undoStack.current.shift();
       setUndoDepth(undoStack.current.length);
     },
-    [base, baseName, analysedAt, baseOptionsKey, disabled, skipRules, options, manualEdits],
+    [base, baseName, analysedAt, baseOptionsKey, disabled, skipRules, options, manualEdits, joinFindings],
   );
 
   const restore = useCallback((prev: (typeof undoStack.current)[number]) => {
@@ -528,6 +575,7 @@ export default function Home() {
     setSkipRules(prev.skipRules);
     setOptions(prev.options);
     setManualEdits(prev.manualEdits);
+    setJoinFindings(prev.joinFindings);
     setPinnedKeys(new Set());
     setHoverKeys(null);
     setScrollToKey(null);
@@ -578,7 +626,14 @@ export default function Home() {
   // re-analyses it. The pre-transform state — table included — sits on the
   // undo stack, so Ctrl+Z reverses the whole operation.
   const applyTransform = useCallback(
-    (make: (t: Table) => Table, label: string, noopMessage: string) => {
+    (
+      make: (t: Table) => Table,
+      label: string,
+      noopMessage: string,
+      /** Advisory findings the transform itself produced (joins). Replaces any
+       *  previous set — they described the previous base table. */
+      producedFindings: Finding[] = [],
+    ) => {
       if (!working) return;
       const next = make(working);
       if (next === working) {
@@ -598,6 +653,7 @@ export default function Home() {
           label,
           snap: undoStack.current[undoStack.current.length - 1]!,
           optionsKey: JSON.stringify(options),
+          joinFindings: producedFindings,
         };
         setRecleansing(
           `${label} — re-analysing ${next.rows.length.toLocaleString("en-GB")} rows…`,
@@ -609,6 +665,7 @@ export default function Home() {
       setBaseOptionsKey(JSON.stringify(options));
       setAnalysedAt(Date.now());
       setManualEdits(new Map());
+      setJoinFindings(producedFindings);
       setPinnedKeys(new Set());
       setHoverKeys(null);
       setScrollToKey(null);
@@ -649,6 +706,25 @@ export default function Home() {
       );
     },
     [applyTransform],
+  );
+
+  // A join is a shape change like any other transform — it bakes manual edits
+  // into a new base, re-analyses, and lands on the undo stack. What makes it
+  // different is that the operation itself has something to say, so its
+  // diagnosis rides along as advisory findings.
+  const onJoin = useCallback(
+    (rightTable: Table, rightName: string, keys: JoinKey[], type: JoinType) => {
+      if (!working) return;
+      const { findings } = joinTables(working, rightTable, { keys, type });
+      setShowJoin(false);
+      applyTransform(
+        (t) => joinTables(t, rightTable, { keys, type }).table,
+        `Joined with "${rightName}"`,
+        "That join produced no change.",
+        findings,
+      );
+    },
+    [working, applyTransform],
   );
 
   // Row/column deletion (from the ✕ buttons in the Changes and Cleaned views).
@@ -1069,8 +1145,10 @@ export default function Home() {
               onClick={() => {
                 setBase(null);
                 setPasted("");
-                setCompareTable(null);
-                setCompareName("");
+                setDatasets([]);
+                setCompareIndex(null);
+                setShowJoin(false);
+                setJoinFindings([]);
               }}
               className="font-mono text-xs text-dim transition hover:text-body"
             >
@@ -1373,16 +1451,27 @@ export default function Home() {
             </button>
           </div>
 
-          {compareTable && (
+          {showJoin && (
+            <JoinPanel
+              working={working}
+              workingName={baseName}
+              datasets={datasets}
+              onJoin={onJoin}
+              onLoadDataset={() => {
+                secondaryIntent.current = "join";
+                compareInput.current?.click();
+              }}
+              onClose={() => setShowJoin(false)}
+            />
+          )}
+
+          {compareIndex !== null && datasets[compareIndex] && (
             <DatasetDiff
               before={base.table}
-              after={compareTable}
+              after={datasets[compareIndex]!.table}
               beforeName={baseName}
-              afterName={compareName}
-              onClose={() => {
-                setCompareTable(null);
-                setCompareName("");
-              }}
+              afterName={datasets[compareIndex]!.name}
+              onClose={() => setCompareIndex(null)}
             />
           )}
 
@@ -1438,11 +1527,34 @@ export default function Home() {
               onPick={downloadReport}
             />
             <button
-              onClick={() => compareInput.current?.click()}
+              onClick={() => {
+                secondaryIntent.current = "compare";
+                if (datasets.length > 0) setCompareIndex(datasets.length - 1);
+                else compareInput.current?.click();
+              }}
               title="Compare this dataset against another version"
               className="rounded-lg border border-line2 bg-card2 px-5 py-2 text-sm font-medium text-body transition hover:border-mut"
             >
               ⇄ Compare
+            </button>
+            <button
+              onClick={() => {
+                if (showJoin) {
+                  setShowJoin(false);
+                  return;
+                }
+                secondaryIntent.current = "join";
+                if (datasets.length > 0) setShowJoin(true);
+                else compareInput.current?.click();
+              }}
+              title="Join another dataset onto this one, and see what the join does before applying it"
+              className={`rounded-lg border px-5 py-2 text-sm font-medium transition ${
+                showJoin
+                  ? "border-teal/50 bg-teal/10 text-teal"
+                  : "border-line2 bg-card2 text-body hover:border-mut"
+              }`}
+            >
+              ⨝ Join
             </button>
             <input
               ref={compareInput}
