@@ -24,6 +24,16 @@ export interface Fixer {
 
 export const EMPTY_OUTPUT: FixerOutput = { findings: [], patches: [] };
 
+/**
+ * Upper bound on the `cells` list an advisory finding carries. `cells` exists
+ * so a UI can jump to and highlight the affected cells — the jump only needs
+ * the first one and the highlight only shows what's on screen, but a gappy
+ * column in a 100k-row Parquet file would otherwise hand the shell a CellRef
+ * per row, per column. Collect in row order and the cap keeps the earliest
+ * cells (and so the jump target) intact.
+ */
+export const MAX_FINDING_CELLS = 1000;
+
 export function cellPatchId(rule: string, row: number, col: number): string {
   return `${rule}:${row}:${col}`;
 }
