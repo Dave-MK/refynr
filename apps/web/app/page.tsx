@@ -8,6 +8,7 @@ import {
   deleteColumn,
   deleteRows,
   findReplace,
+  groupBy,
   joinTables,
   mergeColumns,
   reportToHtml,
@@ -18,6 +19,7 @@ import {
   type CellPatch,
   type CellValue,
   type CleanseResult,
+  type Aggregation,
   type EngineOptions,
   type Finding,
   type JoinKey,
@@ -38,6 +40,8 @@ import { AnalysisPanel } from "@/components/AnalysisPanel";
 import { RecipeBar } from "@/components/RecipeBar";
 import { DatasetDiff } from "@/components/DatasetDiff";
 import { JoinPanel, type LoadedDataset } from "@/components/JoinPanel";
+import { GroupPanel } from "@/components/GroupPanel";
+import { planRecipeJoin, resolveSuppliedDataset } from "@/lib/join-recipe";
 import { DataTable, type EditableCell, type ViewMode } from "@/components/DataTable";
 import { downloadBlob, downloadCsv, downloadJson, downloadTsv, toTsv } from "@/lib/csv";
 import { downloadXlsx } from "@/lib/xlsx";
@@ -186,6 +190,7 @@ export default function Home() {
   // Index into `datasets` currently shown in the diff view, or null for none.
   const [compareIndex, setCompareIndex] = useState<number | null>(null);
   const [showJoin, setShowJoin] = useState(false);
+  const [showGroup, setShowGroup] = useState(false);
   // Why the pending secondary file is being loaded, so the right surface opens
   // when it lands.
   const secondaryIntent = useRef<"compare" | "join" | "recipe-join">("compare");
@@ -288,7 +293,7 @@ export default function Home() {
           setAnalysedAt(Date.now());
           setManualEdits(new Map());
           setJoinFindings(intent.joinFindings);
-          setCurrentJoin(intent.join);
+          if (intent.join) setCurrentJoin(intent.join);
           setAsyncResult(null);
           setPinnedKeys(new Set());
           setHoverKeys(null);
@@ -684,7 +689,12 @@ export default function Home() {
       setAnalysedAt(Date.now());
       setManualEdits(new Map());
       setJoinFindings(produced.findings ?? []);
-      setCurrentJoin(produced.join);
+      // Findings describe one table state, so a later transform clears them.
+      // The join SPEC is provenance — how this data was built — so it survives
+      // subsequent reshapes: dropping it would make a saved recipe quietly stop
+      // reproducing the join, which is worse than recording a join the recipe
+      // can't reproduce every later step of.
+      if (produced.join) setCurrentJoin(produced.join);
       setPinnedKeys(new Set());
       setHoverKeys(null);
       setScrollToKey(null);
@@ -741,6 +751,23 @@ export default function Home() {
         `Joined with "${rightName}"`,
         "That join produced no change.",
         { findings, join: { with: rightName, keys, type } },
+      );
+    },
+    [working, applyTransform],
+  );
+
+  // Summarising collapses many rows into one, taking whatever it left out with
+  // them — so like the join, its diagnosis rides along as advisory findings.
+  const onGroup = useCallback(
+    (by: string[], aggregations: Aggregation[]) => {
+      if (!working) return;
+      const { findings } = groupBy(working, { by, aggregations });
+      setShowGroup(false);
+      applyTransform(
+        (t) => groupBy(t, { by, aggregations }).table,
+        `Summarised by ${by.join(" + ")}`,
+        "That summary produced no change.",
+        { findings },
       );
     },
     [working, applyTransform],
@@ -881,25 +908,22 @@ export default function Home() {
       // A recipe with a join step needs the second dataset, which the recipe
       // deliberately doesn't carry. Use an already-loaded one of that name if
       // it's there; otherwise ask for the file and finish once it lands.
-      if (recipe.join) {
-        const match = datasets.find((d) => d.name === recipe.join!.with) ?? null;
-        if (!match) {
-          pendingJoinRecipe.current = recipe;
-          secondaryIntent.current = "recipe-join";
-          setError(
-            `Recipe "${recipe.name}" joins with "${recipe.join.with}" before cleaning — choose that dataset to continue.`,
-          );
-          compareInput.current?.click();
-          return;
-        }
-        snapshot(`Applied recipe "${recipe.name}"`);
-        // The join runs under the CURRENT options; setting the recipe's options
-        // right after re-cleanses the joined base through the normal path.
-        onJoin(match.table, match.name, recipe.join.keys, recipe.join.type);
-        applyRecipeOptions(recipe);
+      const plan = planRecipeJoin(recipe, datasets);
+      if (plan.kind === "needs-dataset") {
+        pendingJoinRecipe.current = recipe;
+        secondaryIntent.current = "recipe-join";
+        setError(
+          `Recipe "${recipe.name}" joins with "${plan.expected}" before cleaning — choose that dataset to continue.`,
+        );
+        compareInput.current?.click();
         return;
       }
       snapshot(`Applied recipe "${recipe.name}"`);
+      if (plan.kind === "ready" && recipe.join) {
+        // The join runs under the CURRENT options; setting the recipe's options
+        // right after re-cleanses the joined base through the normal path.
+        onJoin(plan.dataset.table, plan.dataset.name, recipe.join.keys, recipe.join.type);
+      }
       applyRecipeOptions(recipe);
     },
     [datasets, snapshot, onJoin, applyRecipeOptions],
@@ -909,8 +933,9 @@ export default function Home() {
   // supplied one. The ref guard makes this a no-op on every other change.
   useEffect(() => {
     const recipe = pendingJoinRecipe.current;
-    if (!recipe?.join || !working || datasets.length === 0) return;
-    const supplied = datasets[datasets.length - 1]!;
+    if (!recipe?.join || !working) return;
+    const supplied = resolveSuppliedDataset(datasets);
+    if (!supplied) return;
     pendingJoinRecipe.current = null;
     secondaryIntent.current = "compare";
     setError(null);
@@ -1528,6 +1553,14 @@ export default function Home() {
             />
           )}
 
+          {showGroup && (
+            <GroupPanel
+              working={working}
+              onApply={onGroup}
+              onClose={() => setShowGroup(false)}
+            />
+          )}
+
           {compareIndex !== null && datasets[compareIndex] && (
             <DatasetDiff
               before={base.table}
@@ -1618,6 +1651,17 @@ export default function Home() {
               }`}
             >
               ⨝ Join
+            </button>
+            <button
+              onClick={() => setShowGroup((v) => !v)}
+              title="Group rows and work out totals, averages and counts — with whatever the summary had to leave out"
+              className={`rounded-lg border px-5 py-2 text-sm font-medium transition ${
+                showGroup
+                  ? "border-teal/50 bg-teal/10 text-teal"
+                  : "border-line2 bg-card2 text-body hover:border-mut"
+              }`}
+            >
+              Σ Summarise
             </button>
             <input
               ref={compareInput}

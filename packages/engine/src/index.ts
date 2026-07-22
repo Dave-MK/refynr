@@ -76,6 +76,15 @@ export {
   type MissReason,
 } from "./join.js";
 export {
+  groupBy,
+  numericValue,
+  type AggFn,
+  type Aggregation,
+  type GroupByOptions,
+  type GroupByResult,
+  type GroupByDiagnostics,
+} from "./aggregate.js";
+export {
   splitColumn,
   mergeColumns,
   unpivot,

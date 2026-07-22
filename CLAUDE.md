@@ -8,7 +8,8 @@ UK-first market. pnpm + Turborepo monorepo.
 ```sh
 pnpm install
 pnpm build                              # turbo build, all packages
-pnpm test                               # engine unit tests (vitest)
+pnpm test                               # engine + web unit tests (vitest)
+pnpm --filter @refynr/web test          # web shell lib/ tests only
 pnpm typecheck                          # all packages
 pnpm --filter @refynr/web dev           # web app on :3000
 pnpm --filter @refynr/extension dev     # extension dev mode
@@ -110,6 +111,18 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
   UI** (replaced by explicit date selects + the findings checkboxes — small,
   enumerable option space is better served by visible controls). Still exported
   and tested; reintroduce only for parameterised commands if ever needed.
+- **Group & summarise** (`aggregate.ts`): `groupBy(table, { by, aggregations })`
+  → `{ table, diagnostics, findings }`; `AggFn` is count / count-distinct / sum /
+  mean / median / min / max. A NEW table, like the other shape changes. Three
+  honesty rules, all of which most tools break silently: **(1)** non-numeric
+  values are excluded from a total and REPORTED, never coerced to 0; **(2)** a
+  group with nothing usable yields **null, not 0** — a zero is indistinguishable
+  from a real zero total and passes every downstream check; **(3)** rows whose
+  group key is blank/sentinel form an explicit `(blank)` group instead of being
+  dropped (pandas discards NaN keys by default — the classic reason a summary
+  doesn't reconcile with its source). Findings are advisory (`patchIds: []`).
+  `numericValue` is exported and reuses `parseDecoratedNumber`, so "£1,200" and
+  "(300)" count while "12 apples" doesn't.
 - **Column transforms** (`transform.ts`): `splitColumn` / `mergeColumns` /
   `unpivot` (wide→long: fold chosen columns into Field/Value rows) — pure
   shape changes returning a NEW table (can't be cell patches). The web shell
@@ -143,12 +156,18 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
    objects (`before`, `after`, `rule`, `reason`, `confidence`); the cleaned
    table is always `applyPatches(original, patches, acceptedIds)`. The engine
    never edits the input table.
-3. **Deterministic rules first, AI second.** Fixers are regex/parsers/stats —
+3. **Shell logic that can be wrong belongs in `lib/`, not the component.**
+   `apps/web` now has vitest (node env, `lib/**/*.test.ts` — no jsdom, no
+   component-testing stack). Anything needing a real browser is verified by
+   driving the app (`.claude/skills/verify`). `lib/join-recipe.ts` is the
+   pattern: the decision with a silently-wrong answer lives in a pure function
+   and is tested directly.
+4. **Deterministic rules first, AI second.** Fixers are regex/parsers/stats —
    reproducible and free. The AI layer (`/api/insights`) receives only column
    profiles, finding summaries, and scores — never raw rows. Sample values
    (up to 5 per column) are the only cell data that leaves the browser, and
    the UI discloses this.
-4. **Advisory findings never auto-fix.** If a value can't be fixed with
+5. **Advisory findings never auto-fix.** If a value can't be fixed with
    confidence (invalid email, impossible date), flag it (`patchIds: []`) —
    never guess.
 
