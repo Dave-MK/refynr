@@ -7,6 +7,7 @@ import {
   type DateOrder,
   type EngineOptions,
   type Recipe,
+  type RecipeJoin,
 } from "@refynr/engine";
 import {
   downloadRecipe,
@@ -28,6 +29,7 @@ import { supabaseConfigured } from "@/lib/supabase/config";
 export function RecipeBar({
   currentOptions,
   currentSkipRules,
+  currentJoin,
   columns,
   suggestions,
   onApplyOptions,
@@ -38,6 +40,9 @@ export function RecipeBar({
 }: {
   currentOptions: EngineOptions;
   currentSkipRules: string[];
+  /** The join that produced the current data, if any — saved into the recipe as
+   *  config (key names + type), never as the joined dataset. */
+  currentJoin?: RecipeJoin;
   /** Column names in the current data, for the expectations editor. */
   columns: string[];
   /** Constraints mined from the data, offered one click away. */
@@ -136,6 +141,7 @@ export function RecipeBar({
       currentOptions,
       currentSkipRules,
       new Date().toISOString(),
+      currentJoin,
     );
     setRecipes(upsertRecipe(recipes, recipe));
     setNaming(false);
@@ -382,6 +388,17 @@ export function RecipeBar({
             >
               Save
             </button>
+            {currentJoin && (
+              <p className="w-full font-mono text-[11px] text-dim">
+                Includes the join with{" "}
+                <span className="text-teal">{currentJoin.with}</span> on{" "}
+                <span className="text-teal">
+                  {currentJoin.keys.map((k) => k.left).join(" + ")}
+                </span>
+                . The recipe saves the join's settings, not that dataset — you'll
+                pick the file again when you replay it.
+              </p>
+            )}
           </div>
         )}
 

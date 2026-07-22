@@ -67,7 +67,10 @@ The engine (`packages/engine`) also exports, all pure and deterministic:
   the other dataset, so the "no cell data" guarantee holds; the dataset is
   supplied at replay (`runRecipe(table, recipe, joinWith)`, `--join-with` on the
   CLI). `runRecipe` THROWS when a join recipe gets no dataset rather than
-  quietly cleaning an unjoined table.
+  quietly cleaning an unjoined table. In the web shell the same rule holds:
+  applying a join recipe reuses a loaded dataset of that name if present, else
+  it asks for the file and finishes via the `pendingJoinRecipe` ref — it never
+  applies the recipe's options without the join.
 - **Expectations** (`expectations.ts`): `checkConstraints` — user-defined
   pass/fail rules (`Constraint`: not-null/unique/regex/range/allowed-values),
   threaded via `EngineOptions.constraints`. Advisory only (never auto-fix).

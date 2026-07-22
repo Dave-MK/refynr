@@ -23,6 +23,7 @@ import {
   type JoinKey,
   type JoinType,
   type Recipe,
+  type RecipeJoin,
   type Table,
 } from "@refynr/engine";
 import type {
@@ -172,6 +173,8 @@ export default function Home() {
         optionsKey: string;
         /** Advisory findings the transform produced (joins); [] for the rest. */
         joinFindings: Finding[];
+        /** The join's reusable shape, for saving into a recipe. */
+        join?: RecipeJoin;
       }
   >(null);
   const [baseName, setBaseName] = useState("data");
@@ -185,12 +188,18 @@ export default function Home() {
   const [showJoin, setShowJoin] = useState(false);
   // Why the pending secondary file is being loaded, so the right surface opens
   // when it lands.
-  const secondaryIntent = useRef<"compare" | "join">("compare");
+  const secondaryIntent = useRef<"compare" | "join" | "recipe-join">("compare");
   // Advisory findings from the join that produced the current base table. Held
   // separately from the engine's result because they describe the OPERATION,
   // not the table's intrinsic quality — and so they survive the re-cleanse that
   // the join's new base triggers.
   const [joinFindings, setJoinFindings] = useState<Finding[]>([]);
+  // The shape of the join that produced the current base, so "Save current" can
+  // record it in a recipe. Config only — never the joined dataset.
+  const [currentJoin, setCurrentJoin] = useState<RecipeJoin | undefined>(undefined);
+  // A recipe waiting on its join dataset: applying a recipe with a join step
+  // needs the second file, which the recipe deliberately doesn't carry.
+  const pendingJoinRecipe = useRef<Recipe | null>(null);
   // "Copy" button feedback, drag-over highlight, and finding→cell locating.
   const [copied, setCopied] = useState(false);
   const [dragActive, setDragActive] = useState(false);
@@ -230,6 +239,8 @@ export default function Home() {
       /** Join diagnosis attached to this base table, so undoing a join takes
        *  its findings away with it. */
       joinFindings: Finding[];
+      /** …and its saveable shape, so undo also forgets the join for recipes. */
+      currentJoin: RecipeJoin | undefined;
     }[]
   >([]);
   const [undoDepth, setUndoDepth] = useState(0);
@@ -277,6 +288,7 @@ export default function Home() {
           setAnalysedAt(Date.now());
           setManualEdits(new Map());
           setJoinFindings(intent.joinFindings);
+          setCurrentJoin(intent.join);
           setAsyncResult(null);
           setPinnedKeys(new Set());
           setHoverKeys(null);
@@ -306,7 +318,9 @@ export default function Home() {
         setDatasets((prev) => {
           const next = [...prev, { name: pendingCompareName.current, table: msg.table }];
           if (secondaryIntent.current === "compare") setCompareIndex(next.length - 1);
-          else setShowJoin(true);
+          else if (secondaryIntent.current === "join") setShowJoin(true);
+          // "recipe-join": the file a waiting recipe was blocked on — the
+          // effect below finishes the recipe now that its dataset exists.
           return next;
         });
         setError(null);
@@ -553,11 +567,12 @@ export default function Home() {
         options,
         manualEdits: new Map(manualEdits),
         joinFindings,
+        currentJoin,
       });
       if (undoStack.current.length > 50) undoStack.current.shift();
       setUndoDepth(undoStack.current.length);
     },
-    [base, baseName, analysedAt, baseOptionsKey, disabled, skipRules, options, manualEdits, joinFindings],
+    [base, baseName, analysedAt, baseOptionsKey, disabled, skipRules, options, manualEdits, joinFindings, currentJoin],
   );
 
   const restore = useCallback((prev: (typeof undoStack.current)[number]) => {
@@ -576,6 +591,7 @@ export default function Home() {
     setOptions(prev.options);
     setManualEdits(prev.manualEdits);
     setJoinFindings(prev.joinFindings);
+    setCurrentJoin(prev.currentJoin);
     setPinnedKeys(new Set());
     setHoverKeys(null);
     setScrollToKey(null);
@@ -630,9 +646,10 @@ export default function Home() {
       make: (t: Table) => Table,
       label: string,
       noopMessage: string,
-      /** Advisory findings the transform itself produced (joins). Replaces any
-       *  previous set — they described the previous base table. */
-      producedFindings: Finding[] = [],
+      /** What a join contributes beyond the new table: its advisory findings,
+       *  and the reusable shape of the join for saving into a recipe. Both
+       *  REPLACE any previous values — they described the previous base. */
+      produced: { findings?: Finding[]; join?: RecipeJoin } = {},
     ) => {
       if (!working) return;
       const next = make(working);
@@ -653,7 +670,8 @@ export default function Home() {
           label,
           snap: undoStack.current[undoStack.current.length - 1]!,
           optionsKey: JSON.stringify(options),
-          joinFindings: producedFindings,
+          joinFindings: produced.findings ?? [],
+          join: produced.join,
         };
         setRecleansing(
           `${label} — re-analysing ${next.rows.length.toLocaleString("en-GB")} rows…`,
@@ -665,7 +683,8 @@ export default function Home() {
       setBaseOptionsKey(JSON.stringify(options));
       setAnalysedAt(Date.now());
       setManualEdits(new Map());
-      setJoinFindings(producedFindings);
+      setJoinFindings(produced.findings ?? []);
+      setCurrentJoin(produced.join);
       setPinnedKeys(new Set());
       setHoverKeys(null);
       setScrollToKey(null);
@@ -721,7 +740,7 @@ export default function Home() {
         (t) => joinTables(t, rightTable, { keys, type }).table,
         `Joined with "${rightName}"`,
         "That join produced no change.",
-        findings,
+        { findings, join: { with: rightName, keys, type } },
       );
     },
     [working, applyTransform],
@@ -845,16 +864,60 @@ export default function Home() {
   );
 
   // Apply a full recipe: its options plus which fixes to leave un-accepted.
-  const onApplyRecipe = useCallback(
+  // Apply a recipe's options and skip list. Kept separate from the join step so
+  // both the immediate path and the "waited for the dataset" path share it.
+  const applyRecipeOptions = useCallback(
     (recipe: Recipe) => {
-      snapshot(`Applied recipe "${recipe.name}"`);
       setOptions(recipe.options);
       setSkipRules(new Set(recipe.skipRules));
       setDisabled(new Set()); // recipe defines the accept/skip state
       showToast(`Applied recipe "${recipe.name}"`);
     },
-    [snapshot, showToast],
+    [showToast],
   );
+
+  const onApplyRecipe = useCallback(
+    (recipe: Recipe) => {
+      // A recipe with a join step needs the second dataset, which the recipe
+      // deliberately doesn't carry. Use an already-loaded one of that name if
+      // it's there; otherwise ask for the file and finish once it lands.
+      if (recipe.join) {
+        const match = datasets.find((d) => d.name === recipe.join!.with) ?? null;
+        if (!match) {
+          pendingJoinRecipe.current = recipe;
+          secondaryIntent.current = "recipe-join";
+          setError(
+            `Recipe "${recipe.name}" joins with "${recipe.join.with}" before cleaning — choose that dataset to continue.`,
+          );
+          compareInput.current?.click();
+          return;
+        }
+        snapshot(`Applied recipe "${recipe.name}"`);
+        // The join runs under the CURRENT options; setting the recipe's options
+        // right after re-cleanses the joined base through the normal path.
+        onJoin(match.table, match.name, recipe.join.keys, recipe.join.type);
+        applyRecipeOptions(recipe);
+        return;
+      }
+      snapshot(`Applied recipe "${recipe.name}"`);
+      applyRecipeOptions(recipe);
+    },
+    [datasets, snapshot, onJoin, applyRecipeOptions],
+  );
+
+  // Finish a recipe that was blocked on its join dataset, now that the user has
+  // supplied one. The ref guard makes this a no-op on every other change.
+  useEffect(() => {
+    const recipe = pendingJoinRecipe.current;
+    if (!recipe?.join || !working || datasets.length === 0) return;
+    const supplied = datasets[datasets.length - 1]!;
+    pendingJoinRecipe.current = null;
+    secondaryIntent.current = "compare";
+    setError(null);
+    snapshot(`Applied recipe "${recipe.name}"`);
+    onJoin(supplied.table, supplied.name, recipe.join.keys, recipe.join.type);
+    applyRecipeOptions(recipe);
+  }, [datasets, working, snapshot, onJoin, applyRecipeOptions]);
 
   // The rules currently left un-accepted — a recipe's skips plus any finding
   // the user has since un-ticked by hand — so "Save current" captures both.
@@ -1630,6 +1693,7 @@ export default function Home() {
             <RecipeBar
               currentOptions={options}
               currentSkipRules={currentSkipRules}
+              currentJoin={currentJoin}
               columns={base.table.headers}
               suggestions={suggestions}
               onApplyOptions={onApplyOptions}
