@@ -33,8 +33,8 @@ export function Landing({ children }: { children: ReactNode }) {
   return (
     <div className="space-y-16 pb-16">
       {/* Hero */}
-      <section className="pt-6 text-center">
-        <Logo size={64} className="mx-auto mb-6" />
+      <section className="pt-1 text-center">
+        <Logo size={64} className="mx-auto mb-5" />
         <span className="label inline-flex items-center gap-2 rounded-full border border-line2 bg-card px-3.5 py-1.5 text-teal!">
           <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden />
           Grammarly for spreadsheets
@@ -47,11 +47,10 @@ export function Landing({ children }: { children: ReactNode }) {
           .
         </h2>
         <p className="mx-auto mt-5 max-w-[600px] text-[15px] leading-relaxed text-mut">
-          refynr finds what's quietly wrong with your data — duplicates, mixed
-          date formats, placeholder blanks, the damage Excel does to IDs and
-          codes — and proposes a fix for each one, with the reason spelled out.
-          You review every change, export a clean copy with an audit report,
-          and save your decisions as a recipe for next month's file.
+          refynr catches what's quietly wrong — duplicates, mixed dates,
+          placeholder blanks, the damage Excel does to IDs and codes — and
+          proposes a fix for each, reason spelled out. Review, export a clean
+          copy with an audit report, and save it as a recipe for next time.
         </p>
 
         {/* Trust row */}

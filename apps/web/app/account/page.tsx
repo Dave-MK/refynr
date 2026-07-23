@@ -35,10 +35,10 @@ export default async function AccountPage() {
       <header className="mb-8 flex items-center justify-between">
         <Link
           href="/"
-          className="flex items-center gap-2.5 text-[22px] font-bold tracking-tight text-hi"
+          className="flex items-center gap-1.5 text-[22px] font-bold tracking-tight text-hi"
         >
           <Logo size={30} />
-          refynr<span className="text-teal">.</span>
+          <span>refynr<span className="text-teal">.</span></span>
         </Link>
         <form action="/auth/signout" method="post">
           <button className="font-mono text-xs text-dim transition hover:text-body">

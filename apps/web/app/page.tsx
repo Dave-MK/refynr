@@ -1226,9 +1226,9 @@ export default function Home() {
           (hero copy, the paste card) keep their own comfortable max-widths. */}
       <div className="w-full">
       <header className="mb-8 flex items-center justify-between">
-        <h1 className="flex items-center gap-2.5 text-[22px] font-bold tracking-tight text-hi">
+        <h1 className="flex items-center gap-1.5 text-[22px] font-bold tracking-tight text-hi">
           <Logo size={30} />
-          refynr<span className="text-teal">.</span>
+          <span>refynr<span className="text-teal">.</span></span>
         </h1>
         <div className="flex items-center gap-5">
           <span className="hidden rounded-full border border-line2 bg-card px-3.5 py-1.5 font-mono text-[11px] text-mut sm:inline-flex">

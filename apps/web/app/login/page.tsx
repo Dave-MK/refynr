@@ -60,10 +60,10 @@ function LoginForm() {
     <main className="mx-auto flex min-h-screen max-w-[420px] flex-col justify-center px-5 py-12">
       <Link
         href="/"
-        className="mb-8 flex items-center gap-2.5 text-[22px] font-bold tracking-tight text-hi"
+        className="mb-8 flex items-center gap-1.5 text-[22px] font-bold tracking-tight text-hi"
       >
         <Logo size={30} />
-        refynr<span className="text-teal">.</span>
+        <span>refynr<span className="text-teal">.</span></span>
       </Link>
 
       <div className="rounded-2xl border border-line bg-card p-7">
