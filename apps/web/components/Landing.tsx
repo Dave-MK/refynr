@@ -32,7 +32,8 @@ function Feature({ title, body }: { title: string; body: string }) {
 export function Landing({ children }: { children: ReactNode }) {
   return (
     <div className="space-y-16 pb-16">
-      {/* Hero */}
+      {/* Hero — the copy and the drop zone are one unit above the fold, so the
+          primary action sits with the pitch instead of a screen below it. */}
       <section className="pt-1 text-center">
         <Logo size={64} className="mx-auto mb-5" />
         <span className="label inline-flex items-center gap-2 rounded-full border border-line2 bg-card px-3.5 py-1.5 text-teal!">
@@ -53,8 +54,14 @@ export function Landing({ children }: { children: ReactNode }) {
           copy with an audit report, and save it as a recipe for next time.
         </p>
 
-        {/* Trust row */}
-        <div className="mt-7 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-[11px] text-dim">
+        {/* The drop zone IS the hero's call to action — a comfortable input
+            width, aligned with the copy above it, not a panel far below. */}
+        <div id="start" className="mx-auto mt-8 w-full max-w-[720px] scroll-mt-8 text-left">
+          {children}
+        </div>
+
+        {/* Trust row closes the hero, reassuring right under the input. */}
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 font-mono text-[11px] text-dim">
           <span>✓ Runs entirely in your browser</span>
           <span>✓ Your original is never modified</span>
           <span>✓ CSV, Excel, JSON &amp; Parquet</span>
@@ -63,14 +70,8 @@ export function Landing({ children }: { children: ReactNode }) {
         </div>
       </section>
 
-      {/* Primary CTA — the paste/upload card. Full-width pages still deserve
-          a comfortable input width — a viewport-wide textarea reads badly. */}
-      <section id="start" className="mx-auto w-full max-w-[960px] scroll-mt-8">
-        {children}
-      </section>
-
       {/* How it works */}
-      <section>
+      <section id="how" className="scroll-mt-6">
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">How it works</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
@@ -97,7 +98,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* What it fixes */}
-      <section>
+      <section id="catches" className="scroll-mt-6">
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">What refynr catches</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
@@ -145,7 +146,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* The difference vs in-cell AI */}
-      <section>
+      <section id="why" className="scroll-mt-6">
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">Why not just use AI in Excel?</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
@@ -179,7 +180,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* Privacy note */}
-      <section className="rounded-2xl border border-teal/20 bg-card p-7 text-center">
+      <section id="privacy" className="scroll-mt-6 rounded-2xl border border-teal/20 bg-card p-7 text-center">
         <h2 className="text-lg font-semibold text-hi">
           Your data stays yours
         </h2>

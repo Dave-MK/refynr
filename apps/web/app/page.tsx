@@ -1230,10 +1230,16 @@ export default function Home() {
           <Logo size={30} />
           <span>refynr<span className="text-teal">.</span></span>
         </h1>
+        {/* Section nav — only on the landing view, where the sections exist. */}
+        {!base && (
+          <nav className="hidden items-center gap-7 font-mono text-[12px] text-mut lg:flex">
+            <a href="#how" className="transition hover:text-body">How it works</a>
+            <a href="#catches" className="transition hover:text-body">What it catches</a>
+            <a href="#why" className="transition hover:text-body">Why refynr</a>
+            <a href="#privacy" className="transition hover:text-body">Privacy</a>
+          </nav>
+        )}
         <div className="flex items-center gap-5">
-          <span className="hidden rounded-full border border-line2 bg-card px-3.5 py-1.5 font-mono text-[11px] text-mut sm:inline-flex">
-            runs in your browser
-          </span>
           {base && (
             <button
               onClick={() => {
@@ -1256,18 +1262,12 @@ export default function Home() {
 
       {!base && (
         <Landing>
-        <section className="rounded-2xl border border-line bg-card p-8">
-          <h2 className="text-lg font-semibold text-hi">
-            Paste data or upload a spreadsheet
-          </h2>
-          <p className="mt-1 text-sm text-mut">
-            Everything runs in your browser — your data never leaves this device.
-          </p>
+        <section className="rounded-2xl border border-line bg-card p-6 shadow-[0_8px_40px_rgba(0,0,0,0.25)]">
           <textarea
             value={pasted}
             onChange={(e) => setPasted(e.target.value)}
             placeholder={"Paste from Excel or Google Sheets (Ctrl+V)…\n\nName\tEmail\tJoined\nJohn Smith\tjohn@acme.com\t15/01/2024"}
-            className="mt-5 h-48 w-full resize-y rounded-xl border border-line bg-inset p-4 font-mono text-[13px] text-body outline-none placeholder:text-dim focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
+            className="h-44 w-full resize-y rounded-xl border border-line bg-inset p-4 font-mono text-[13px] text-body outline-none placeholder:text-dim focus:border-teal/60 focus:ring-2 focus:ring-teal/20"
           />
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <button
@@ -1318,15 +1318,21 @@ export default function Home() {
 
       {base && working && result && (
         <div className="space-y-5">
-          <p className="font-mono text-[12px] text-mut">
-            <span className="text-body">{baseName}</span> ·{" "}
-            <span className="tabular-nums text-hi">
-              {base.table.rows.length.toLocaleString("en-GB")}
-            </span>{" "}
-            rows ×{" "}
-            <span className="tabular-nums text-hi">{base.table.headers.length}</span>{" "}
-            columns
-          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <p className="font-mono text-[12px] text-mut">
+              <span className="text-body">{baseName}</span> ·{" "}
+              <span className="tabular-nums text-hi">
+                {base.table.rows.length.toLocaleString("en-GB")}
+              </span>{" "}
+              rows ×{" "}
+              <span className="tabular-nums text-hi">{base.table.headers.length}</span>{" "}
+              columns
+            </p>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-teal/25 bg-teal/5 px-2.5 py-1 font-mono text-[11px] text-teal">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal" aria-hidden />
+              runs in your browser
+            </span>
+          </div>
 
           {error && (
             <p className="rounded-lg border border-coral/25 bg-coral/10 px-4 py-3 text-sm text-coral">
