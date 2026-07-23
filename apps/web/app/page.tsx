@@ -1232,7 +1232,7 @@ export default function Home() {
         </h1>
         {/* Section nav — only on the landing view, where the sections exist. */}
         {!base && (
-          <nav className="hidden items-center gap-7 font-mono text-[12px] text-mut lg:flex">
+          <nav className="hidden items-center gap-5 font-mono text-[12px] text-mut md:flex">
             <a href="#how" className="transition hover:text-body">How it works</a>
             <a href="#catches" className="transition hover:text-body">What it catches</a>
             <a href="#why" className="transition hover:text-body">Why refynr</a>
