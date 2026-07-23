@@ -67,6 +67,15 @@ function applyManualEdits(base: Table, edits: Map<string, CellValue>): Table {
   return { headers: base.headers, rows };
 }
 
+/** Landing-page section anchors — shared by the desktop header nav and the
+ *  small-screen dropdown so the two can't drift apart. */
+const NAV_LINKS = [
+  ["#how", "How it works"],
+  ["#catches", "What it catches"],
+  ["#why", "Why refynr"],
+  ["#privacy", "Privacy"],
+] as const;
+
 const DOWNLOAD_FORMATS = [
   ["csv", "CSV", ".csv — opens anywhere, keeps it simple"],
   ["xlsx", "Excel", ".xlsx — a ready-to-use workbook"],
@@ -194,6 +203,11 @@ export default function Home() {
   const [compareIndex, setCompareIndex] = useState<number | null>(null);
   const [showJoin, setShowJoin] = useState(false);
   const [showGroup, setShowGroup] = useState(false);
+  // Small-screen section-nav dropdown (the hamburger menu on the landing view).
+  const [navOpen, setNavOpen] = useState(false);
+  // Whether the page has scrolled at all — drives the header's translucent
+  // treatment (transparent at the very top, frosted once you scroll).
+  const [scrolled, setScrolled] = useState(false);
   // Why the pending secondary file is being loaded, so the right surface opens
   // when it lands.
   const secondaryIntent = useRef<"compare" | "join" | "recipe-join">("compare");
@@ -1192,6 +1206,22 @@ export default function Home() {
     return () => window.removeEventListener("click", close);
   }, [openMenu]);
 
+  // Same for the small-screen section-nav dropdown.
+  useEffect(() => {
+    if (!navOpen) return;
+    const close = () => setNavOpen(false);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [navOpen]);
+
+  // Track whether the page has scrolled, so the sticky header can turn frosted.
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 4);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   // Close the settings modal on Escape.
   useEffect(() => {
     if (!showSettings) return;
@@ -1225,21 +1255,63 @@ export default function Home() {
       {/* Landing and workspace both use the full viewport; focused elements
           (hero copy, the paste card) keep their own comfortable max-widths. */}
       <div className="w-full">
-      <header className="mb-8 flex items-center justify-between">
+      <header
+        className={`sticky top-0 z-30 -mx-4 mb-8 flex items-center justify-between border-b px-4 py-3 transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 ${
+          scrolled
+            ? "border-line bg-ink/70 backdrop-blur-md"
+            : "border-transparent"
+        }`}
+      >
         <h1 className="flex items-center gap-1.5 text-[22px] font-bold tracking-tight text-hi">
           <Logo size={30} />
           <span>refynr<span className="text-teal">.</span></span>
         </h1>
-        {/* Section nav — only on the landing view, where the sections exist. */}
+        {/* Section nav — only on the landing view, where the sections exist.
+            Inline links from md up; a dropdown below that (see the ☰ button). */}
         {!base && (
           <nav className="hidden items-center gap-5 font-mono text-[12px] text-mut md:flex">
-            <a href="#how" className="transition hover:text-body">How it works</a>
-            <a href="#catches" className="transition hover:text-body">What it catches</a>
-            <a href="#why" className="transition hover:text-body">Why refynr</a>
-            <a href="#privacy" className="transition hover:text-body">Privacy</a>
+            {NAV_LINKS.map(([href, label]) => (
+              <a key={href} href={href} className="transition hover:text-body">
+                {label}
+              </a>
+            ))}
           </nav>
         )}
         <div className="flex items-center gap-5">
+          {!base && (
+            <div className="relative md:hidden">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setNavOpen((v) => !v);
+                }}
+                aria-label="Sections"
+                aria-expanded={navOpen}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-line2 bg-card2 text-mut transition hover:text-body"
+              >
+                <span aria-hidden className="text-[15px] leading-none">
+                  {navOpen ? "✕" : "☰"}
+                </span>
+              </button>
+              {navOpen && (
+                <div
+                  className="absolute right-0 top-full z-40 mt-2 w-48 overflow-hidden rounded-xl border border-line2 bg-card shadow-[0_8px_30px_rgba(0,0,0,0.4)]"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {NAV_LINKS.map(([href, label]) => (
+                    <a
+                      key={href}
+                      href={href}
+                      onClick={() => setNavOpen(false)}
+                      className="block px-4 py-2.5 font-mono text-[12px] text-body transition hover:bg-teal/10 hover:text-teal"
+                    >
+                      {label}
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {base && (
             <button
               onClick={() => {

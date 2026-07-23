@@ -56,7 +56,7 @@ export function Landing({ children }: { children: ReactNode }) {
 
         {/* The drop zone IS the hero's call to action — a comfortable input
             width, aligned with the copy above it, not a panel far below. */}
-        <div id="start" className="mx-auto mt-8 w-full max-w-[720px] scroll-mt-8 text-left">
+        <div id="start" className="mx-auto mt-8 w-full max-w-[720px] scroll-mt-20 text-left">
           {children}
         </div>
 
@@ -71,7 +71,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* How it works */}
-      <section id="how" className="scroll-mt-6">
+      <section id="how" className="scroll-mt-20">
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">How it works</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
@@ -98,7 +98,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* What it fixes */}
-      <section id="catches" className="scroll-mt-6">
+      <section id="catches" className="scroll-mt-20">
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">What refynr catches</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
@@ -146,7 +146,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* The difference vs in-cell AI */}
-      <section id="why" className="scroll-mt-6">
+      <section id="why" className="scroll-mt-20">
         <div className="mb-6 text-center">
           <h2 className="label text-teal!">Why not just use AI in Excel?</h2>
           <p className="mt-2 text-lg font-semibold text-hi">
@@ -180,7 +180,7 @@ export function Landing({ children }: { children: ReactNode }) {
       </section>
 
       {/* Privacy note */}
-      <section id="privacy" className="scroll-mt-6 rounded-2xl border border-teal/20 bg-card p-7 text-center">
+      <section id="privacy" className="scroll-mt-20 rounded-2xl border border-teal/20 bg-card p-7 text-center">
         <h2 className="text-lg font-semibold text-hi">
           Your data stays yours
         </h2>
